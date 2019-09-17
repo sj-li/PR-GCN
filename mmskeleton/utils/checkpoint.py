@@ -13,3 +13,7 @@ def load_checkpoint(model, filename, *args, **kwargs):
         model_url = (mmskeleton_model_urls[model_name])
         checkpoint = mmcv_load_checkpoint(model, model_url, *args, **kwargs)
         return checkpoint
+    else:
+        checkpoint = mmcv_load_checkpoint(model, filename)
+        return checkpoint
+
