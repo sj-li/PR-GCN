@@ -26,6 +26,8 @@ class MFFNet(nn.Module):
         self.register_buffer('A', A)
 
         kernel_size = A.size(0)
+
+        self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))
         
         self.GCN_pos = nn.ModuleList((
             GCNModule(in_channels, 64, kernel_size),
@@ -46,9 +48,9 @@ class MFFNet(nn.Module):
         ))
         
         self.AttenGen = nn.ModuleList((
-            AttentionGenerator(),
-            AttentionGenerator(),
-            AttentionGenerator()
+            AttentionGenerator(64),
+            AttentionGenerator(64),
+            AttentionGenerator(128)
         ))
 
         self.fusion = nn.ModuleList((
@@ -60,12 +62,12 @@ class MFFNet(nn.Module):
         self.block_num = len(self.fusion)
 
     def BasicBlock(self, pos_feat, tmf_feat, smf_feat, atten_p, block_num):
-        tmf_feat = self.GCN_tmf[block_num](tmf_feat, self.A*atten_p)
-        smf_feat = self.GCN_smf[block_num](smf_feat, self.A*atten_p)
+        tmf_feat = self.GCN_tmf[block_num](tmf_feat, atten_p)
+        smf_feat = self.GCN_smf[block_num](smf_feat, atten_p)
 
-        atten = self.AttenGen[block_num](tmf_feat, smf_feat)
+        atten = self.AttenGen[block_num](tmf_feat, smf_feat, self.A)
 
-        pos_feat = self.GCN_pos[block_num](pos_feat, self.A*atten)
+        pos_feat = self.GCN_pos[block_num](pos_feat, atten)
 
         return pos_feat, tmf_feat, smf_feat, atten
 
@@ -90,7 +92,7 @@ class MFFNet(nn.Module):
 
         # build Spatial Movement Field
         smf = torch.zeros_like(pos)
-        center = pos[:,:,:,self.graph.center].unsqueeze(-1).expand(V)
+        center = pos[:,:,:,self.graph.center].unsqueeze(-1).repeat(1, 1, 1, V)
         smf = pos - center
         smf_feat = smf
         # TODO: normalization
@@ -101,7 +103,7 @@ class MFFNet(nn.Module):
             pos_feat, tmf_feat, smf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, smf_feat, atten)
 
         # global pooling
-        feat = F.avg_pool2d(feat, feat.size()[2:])
+        feat = F.avg_pool2d(pos_feat, pos_feat.size()[2:])
         feat = feat.view(N, M, -1, 1, 1).mean(dim=1)
 
         # prediction
@@ -166,57 +168,6 @@ class MFFModule(nn.Module):
         feat = self.conv_fusion(feat)
         return feat
 
-        
-# class GCNModule(nn.Module):
-#     def __init__(self,
-#                  in_channels,
-#                  out_channels,
-#                  kernel_size,
-#                  stride=1,
-#                  bias = True,
-#                  residual = True):
-
-#         super().__init__()
-        
-#         self.kernel_size = kernel_size
-#         self.conv = nn.Conv2d(in_channels,
-#                               out_channels * kernel_size,
-#                               kernel_size = (kernel_size, 1),
-#                               bias=bias)
-
-#         if not residual:
-#             self.residual = lambda x: 0
-
-#         elif (in_channels == out_channels) and (stride == 1):
-#             self.residual = lambda x: x
-
-#         else:
-#             self.residual = nn.Sequential(
-#                 nn.Conv2d(in_channels,
-#                           out_channels,
-#                           kernel_size=1,
-#                           stride=(stride, 1)),
-#                 nn.BatchNorm2d(out_channels),
-#             )
-    
-#     def forward(self, x, A):
-#         assert A.size(0) == self.kernel_size
-
-#         res = self.residual(x)
-
-#         print(x.shape)
-#         x = self.conv(x)
-#         print(x.shape)
-
-#         # n, kc, t, v = x.size()
-#         # x = x.view(n, self.kernel_size, kc // self.kernel_size, t, v)
-#         # x = torch.einsum('nkctv,kvw->nctw', (x, A))
-#         # x = x.contiguous()
-
-#         # x = x + res
-
-#         return x, A
-
 class GCNModule(nn.Module):
     r"""Applies a spatial temporal graph convolution over an input graph sequence.
 
@@ -253,7 +204,7 @@ class GCNModule(nn.Module):
 
         self.kernel_size = kernel_size
         self.conv = nn.Conv2d(in_channels,
-                              out_channels * kernel_size,
+                              out_channels,
                               kernel_size=1,
                               bias=True)
 
@@ -275,16 +226,16 @@ class GCNModule(nn.Module):
 
         self.relu = nn.ReLU(inplace=True)
 
-    def forward(self, x, A):
-        assert A.size(0) == self.kernel_size
+    def forward(self, x, atten):
 
         res = self.residual(x)
 
         x = self.conv(x)
-        n, kc, t, v = x.size()
-        x = x.view(n, self.kernel_size, kc // self.kernel_size, t, v)
-        x = torch.einsum('nkctv,kvw->nctw', (x, A)).contiguous()
-        
         x = x + res
 
-        return self.relu(x), A
+        x = x.permute(0, 2, 3, 1)
+        x = atten*x
+        x = x.permute(0, 3, 1, 2)
+        
+
+        return self.relu(x), atten
