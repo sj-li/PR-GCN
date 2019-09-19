@@ -23,28 +23,28 @@ class MFFNet(nn.Module):
         A = torch.tensor(self.graph.A,
                  dtype=torch.float32,
                  requires_grad=False)
+        A.squeeze_()
+        
         self.register_buffer('A', A)
-
-        kernel_size = A.size(0)
 
         self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))
         
         self.GCN_pos = nn.ModuleList((
-            GCNModule(in_channels, 64, kernel_size),
-            GCNModule(64, 64, kernel_size),
-            GCNModule(64, 128, kernel_size)
+            GCNModule(in_channels, 64),
+            GCNModule(64, 64),
+            GCNModule(64, 128)
         ))
 
         self.GCN_tmf = nn.ModuleList((
-            GCNModule(in_channels, 64, kernel_size),
-            GCNModule(64, 64, kernel_size),
-            GCNModule(64, 128, kernel_size)
+            GCNModule(in_channels, 64),
+            GCNModule(64, 64),
+            GCNModule(64, 128)
         ))
         
         self.GCN_smf = nn.ModuleList((
-            GCNModule(in_channels, 64, kernel_size),
-            GCNModule(64, 64, kernel_size),
-            GCNModule(64, 128, kernel_size)
+            GCNModule(in_channels, 64),
+            GCNModule(64, 64),
+            GCNModule(64, 128)
         ))
         
         self.AttenGen = nn.ModuleList((
@@ -90,8 +90,6 @@ class MFFNet(nn.Module):
         tmf_feat = tmf
         # TODO: normalization
 
-        exit()
-
         # build Spatial Movement Field
         smf = torch.zeros_like(pos)
         center = pos[:,:,:,self.graph.center].unsqueeze(-1).repeat(1, 1, 1, V)
@@ -99,10 +97,14 @@ class MFFNet(nn.Module):
         smf_feat = smf
         # TODO: normalization
 
-        atten = nn.Identity(A.size(0))
+        atten = self.A.unsqueeze(0).unsqueeze(0).repeat(N*M, T, 1, )
+        print(atten.size())
+        exit()
 
         for i in range(self.block_num):
-            pos_feat, tmf_feat, smf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, smf_feat, atten)
+            pos_feat, tmf_feat, smf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, smf_feat, atten, i)
+
+        exit()
 
         # global pooling
         feat = F.avg_pool2d(pos_feat, pos_feat.size()[2:])
@@ -197,14 +199,12 @@ class GCNModule(nn.Module):
     def __init__(self,
                  in_channels,
                  out_channels,
-                 kernel_size,
                  stride=1,
                  dropout=0,
                  residual=True):
         super().__init__()
 
 
-        self.kernel_size = kernel_size
         self.conv = nn.Conv2d(in_channels,
                               out_channels,
                               kernel_size=1,
@@ -236,7 +236,8 @@ class GCNModule(nn.Module):
         x = x + res
 
         x = x.permute(0, 2, 3, 1)
-        x = atten*x
+        print(type(atten))
+        x = torch.matmul(atten, x)
         x = x.permute(0, 3, 1, 2)
         
 

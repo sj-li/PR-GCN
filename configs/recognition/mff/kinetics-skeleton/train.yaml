@@ -24,7 +24,7 @@ processor_cfg:
     edge_importance_weighting: True
     graph_cfg:
       layout: 'openpose'
-      strategy: 'spatial'
+      strategy: 'uniform'
   loss_cfg:
     name: 'torch.nn.CrossEntropyLoss'
 
