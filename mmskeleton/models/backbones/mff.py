@@ -61,13 +61,15 @@ class MFFNet(nn.Module):
 
         self.block_num = len(self.fusion)
 
+        self.fcn = nn.Conv2d(128, num_class, kernel_size=1)
+
     def BasicBlock(self, pos_feat, tmf_feat, smf_feat, atten_p, block_num):
-        tmf_feat = self.GCN_tmf[block_num](tmf_feat, atten_p)
-        smf_feat = self.GCN_smf[block_num](smf_feat, atten_p)
+        tmf_feat, _ = self.GCN_tmf[block_num](tmf_feat, atten_p)
+        smf_feat, _ = self.GCN_smf[block_num](smf_feat, atten_p)
 
         atten = self.AttenGen[block_num](tmf_feat, smf_feat, self.A)
 
-        pos_feat = self.GCN_pos[block_num](pos_feat, atten)
+        pos_feat, _ = self.GCN_pos[block_num](pos_feat, atten)
 
         return pos_feat, tmf_feat, smf_feat, atten
 
@@ -97,14 +99,10 @@ class MFFNet(nn.Module):
         smf_feat = smf
         # TODO: normalization
 
-        atten = self.A.unsqueeze(0).unsqueeze(0).repeat(N*M, T, 1, )
-        print(atten.size())
-        exit()
+        atten = self.A.unsqueeze(0).unsqueeze(0).repeat(N*M, T, 1, 1)
 
         for i in range(self.block_num):
             pos_feat, tmf_feat, smf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, smf_feat, atten, i)
-
-        exit()
 
         # global pooling
         feat = F.avg_pool2d(pos_feat, pos_feat.size()[2:])
@@ -236,7 +234,6 @@ class GCNModule(nn.Module):
         x = x + res
 
         x = x.permute(0, 2, 3, 1)
-        print(type(atten))
         x = torch.matmul(atten, x)
         x = x.permute(0, 3, 1, 2)
         
