@@ -113,11 +113,85 @@ class MFFNet(nn.Module):
         
 
 class AttentionGenerator(nn.Module):
-    def __init__(self):
-        pass
+    def __init__(self, in_channels, alpha=0.1):
+        super().__init__()
+        self.alpha = alpha
 
-    def forward(self, smf_feat, tfm_feat):
-        pass
+        self.conv_fusion = nn.Conv2d(in_channels*2, 64, kernel_size = 1)
+        self.conv_atten = nn.Conv2d(128, 1, kernel_size = 1)
+        self.activiation = nn.LeakyReLU(self.alpha)
+        
+
+    def forward(self, smf_feat, tfm_feat, A):
+        feat = torch.cat((smf_feat, tfm_feat), 1)
+        feat = self.conv_fusion(feat)
+
+        B, C, T, V = feat.shape
+
+        feat1 = feat.unsqueeze(1)
+        feat1 = feat1.repeat(1, 18, 1, 1, 1)
+        feat1 = feat1.permute(0, 2, 3, 4, 1).contiguous()
+        feat1 = feat1.view(B, C, T, V*V)
+
+        feat2 = feat.unsqueeze(0)
+        feat2 = feat2.repeat(18, 1, 1, 1, 1)
+        feat2 = feat2.permute(1, 2, 3, 0, 4).contiguous()
+        feat2 = feat2.view(B, C, T, V*V)
+
+        feat = torch.cat([feat1, feat2], dim=1)
+        feat = self.conv_atten(feat)
+        feat = feat.squeeze_().view(B, T, V, V)
+
+        feat = self.activiation(feat)
+        feat_exp = torch.exp(feat)
+        feat_exp = feat_exp*A
+
+        feat_agg = torch.sum(feat_exp, dim=-1).unsqueeze_(-1).repeat(1, 1, 1, V)
+        atten = feat_exp/feat_agg
+
+        return atten
+
+class GraphAttentionLayer(nn.Module):
+    """
+    Simple GAT layer, similar to https://arxiv.org/abs/1710.10903
+    """
+
+    def __init__(self, in_features, out_features, dropout, alpha, concat=True):
+        super(GraphAttentionLayer, self).__init__()
+        self.dropout = dropout
+        self.in_features = in_features
+        self.out_features = out_features
+        self.alpha = alpha
+        self.concat = concat
+
+        self.W = nn.Parameter(torch.zeros(size=(in_features, out_features)))
+        nn.init.xavier_uniform_(self.W.data, gain=1.414)
+        self.a = nn.Parameter(torch.zeros(size=(2*out_features, 1)))
+        nn.init.xavier_uniform_(self.a.data, gain=1.414)
+
+        self.leakyrelu = nn.LeakyReLU(self.alpha)
+
+    def forward(self, input, adj):
+        h = torch.mm(input, self.W)
+        N = h.size()[0]
+
+        a_input = torch.cat([h.repeat(1, N).view(N * N, -1), h.repeat(N, 1)], dim=1).view(N, -1, 2 * self.out_features)
+        e = self.leakyrelu(torch.matmul(a_input, self.a).squeeze(2))
+
+        zero_vec = -9e15*torch.ones_like(e)
+        attention = torch.where(adj > 0, e, zero_vec)
+        attention = F.softmax(attention, dim=1)
+        attention = F.dropout(attention, self.dropout, training=self.training)
+        h_prime = torch.matmul(attention, h)
+
+        if self.concat:
+            return F.elu(h_prime)
+        else:
+            return h_prime
+
+    def __repr__(self):
+        return self.__class__.__name__ + ' (' + str(self.in_features) + ' -> ' + str(self.out_features) + ')'
+
 
 class MFFModule(nn.Module):
     def __init__(self,
@@ -177,7 +251,3 @@ class GCNModule(nn.Module):
         x = x + res
 
         return x, A
-
-if __name__ == '__main__':
-    model = MFFNet()
-  
