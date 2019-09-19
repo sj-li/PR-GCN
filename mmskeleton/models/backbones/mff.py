@@ -85,10 +85,12 @@ class MFFNet(nn.Module):
 
         # build Temporal Movement Field
         tmf = torch.zeros_like(pos)
-        tmf[:,:,:-1,:,:] = pos[:,:,1:,:,:] - pos[:,:,:-1,:,:]
-        tmf[:,:,-1,:,:] = tmf[:,:,-2,:,:]
+        tmf[:,:,:-1,:] = pos[:,:,1:,:] - pos[:,:,:-1,:]
+        tmf[:,:,-1,:] = tmf[:,:,-2,:]
         tmf_feat = tmf
         # TODO: normalization
+
+        exit()
 
         # build Spatial Movement Field
         smf = torch.zeros_like(pos)
