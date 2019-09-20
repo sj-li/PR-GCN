@@ -70,39 +70,67 @@ class MFFNet(nn.Module):
         atten = self.AttenGen[block_num](tmf_feat, smf_feat, self.A)
 
         pos_feat, _ = self.GCN_pos[block_num](pos_feat, atten)
+        pos_feat = self.fusion[block_num](pos_feat, tmf_feat)
 
         return pos_feat, tmf_feat, smf_feat, atten
+
+    def normalize(self, feat):
+        N, C, T, V, M = feat.size()
+        feat = feat.permute(0, 4, 3, 1, 2).contiguous()
+        feat = feat.view(N * M, V * C, T)
+        feat = self.data_bn(feat)
+        feat = feat.view(N, M, V, C, T)
+        feat = feat.permute(0, 1, 3, 4, 2).contiguous()
+        feat = feat.view(N * M, C, T, V)
+
+        return feat
 
     def forward(self, pos):
 
         # data normalization
         N, C, T, V, M = pos.size()
-        pos = pos.permute(0, 4, 3, 1, 2).contiguous()
-        pos = pos.view(N * M, V * C, T)
-        pos = self.data_bn(pos)
-        pos = pos.view(N, M, V, C, T)
-        pos = pos.permute(0, 1, 3, 4, 2).contiguous()
-        pos = pos.view(N * M, C, T, V)
-        pos_feat = pos
 
-        # build Temporal Movement Field
         tmf = torch.zeros_like(pos)
-        tmf[:,:,:-1,:] = pos[:,:,1:,:] - pos[:,:,:-1,:]
-        tmf[:,:,-1,:] = tmf[:,:,-2,:]
-        tmf_feat = tmf
-        # TODO: normalization
+        tmf[:,:,:-1,:,:] = pos[:,:,1:,:,:] - pos[:,:,:-1,:,:]
+        tmf[:,:,-1,:,:] = tmf[:,:,-2,:,:]
 
-        # build Spatial Movement Field
-        smf = torch.zeros_like(pos)
-        center = pos[:,:,:,self.graph.center].unsqueeze(-1).repeat(1, 1, 1, V)
+        center = pos[:,:,:,self.graph.center,:].unsqueeze(-2).repeat(1, 1, 1, V, 1)
         smf = pos - center
-        smf_feat = smf
-        # TODO: normalization
 
-        atten = self.A.unsqueeze(0).unsqueeze(0).repeat(N*M, T, 1, 1)
+        pos_feat = self.normalize(pos)
+        tmf_feat = self.normalize(tmf)
+        smf_feat = self.normalize(smf)
+
+    # def forward(self, pos):
+
+    #     # data normalization
+    #     N, C, T, V, M = pos.size()
+    #     pos = pos.permute(0, 4, 3, 1, 2).contiguous()
+    #     pos = pos.view(N * M, V * C, T)
+    #     pos = self.data_bn(pos)
+    #     pos = pos.view(N, M, V, C, T)
+    #     pos = pos.permute(0, 1, 3, 4, 2).contiguous()
+    #     pos = pos.view(N * M, C, T, V)
+    #     pos_feat = pos
+
+    #     # build Temporal Movement Field
+    #     tmf = torch.zeros_like(pos)
+    #     tmf[:,:,:-1,:] = pos[:,:,1:,:] - pos[:,:,:-1,:]
+    #     tmf[:,:,-1,:] = tmf[:,:,-2,:]
+    #     tmf_feat = tmf
+    #     # TODO: normalization
+
+    #     # build Spatial Movement Field
+    #     smf = torch.zeros_like(pos)
+    #     center = pos[:,:,:,self.graph.center].unsqueeze(-1).repeat(1, 1, 1, V)
+    #     smf = pos - center
+    #     smf_feat = smf
+    #     # TODO: normalization
+
+        atten_p = self.A.unsqueeze(0).unsqueeze(0).repeat(N*M, T, 1, 1)
 
         for i in range(self.block_num):
-            pos_feat, tmf_feat, smf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, smf_feat, atten, i)
+            pos_feat, tmf_feat, smf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, smf_feat, atten_p, i)
 
         # global pooling
         feat = F.avg_pool2d(pos_feat, pos_feat.size()[2:])
@@ -165,7 +193,7 @@ class MFFModule(nn.Module):
                                      out_channels,
                                      kernel_size=1)
     
-    def forward(self, pos_feat, tfm_feat, A):
+    def forward(self, pos_feat, tfm_feat):
         feat = torch.cat((pos_feat, tfm_feat), 1)
         feat = self.conv_fusion(feat)
         return feat
