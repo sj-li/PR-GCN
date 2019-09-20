@@ -41,12 +41,6 @@ class MFFNet(nn.Module):
             GCNModule(64, 128)
         ))
         
-        self.GCN_smf = nn.ModuleList((
-            GCNModule(in_channels, 64),
-            GCNModule(64, 64),
-            GCNModule(64, 128)
-        ))
-        
         self.AttenGen = nn.ModuleList((
             AttentionGenerator(64),
             AttentionGenerator(64),
@@ -63,16 +57,15 @@ class MFFNet(nn.Module):
 
         self.fcn = nn.Conv2d(128, num_class, kernel_size=1)
 
-    def BasicBlock(self, pos_feat, tmf_feat, smf_feat, atten_p, block_num):
+    def BasicBlock(self, pos_feat, tmf_feat, atten_p, block_num):
         tmf_feat, _ = self.GCN_tmf[block_num](tmf_feat, atten_p)
-        smf_feat, _ = self.GCN_smf[block_num](smf_feat, atten_p)
 
-        atten = self.AttenGen[block_num](tmf_feat, smf_feat, self.A)
+        atten = self.AttenGen[block_num](tmf_feat, self.A)
 
         pos_feat, _ = self.GCN_pos[block_num](pos_feat, atten)
         pos_feat = self.fusion[block_num](pos_feat, tmf_feat)
 
-        return pos_feat, tmf_feat, smf_feat, atten
+        return pos_feat, tmf_feat, atten
 
     def normalize(self, feat):
         N, C, T, V, M = feat.size()
@@ -94,43 +87,13 @@ class MFFNet(nn.Module):
         tmf[:,:,:-1,:,:] = pos[:,:,1:,:,:] - pos[:,:,:-1,:,:]
         tmf[:,:,-1,:,:] = tmf[:,:,-2,:,:]
 
-        center = pos[:,:,:,self.graph.center,:].unsqueeze(-2).repeat(1, 1, 1, V, 1)
-        smf = pos - center
-
         pos_feat = self.normalize(pos)
         tmf_feat = self.normalize(tmf)
-        smf_feat = self.normalize(smf)
-
-    # def forward(self, pos):
-
-    #     # data normalization
-    #     N, C, T, V, M = pos.size()
-    #     pos = pos.permute(0, 4, 3, 1, 2).contiguous()
-    #     pos = pos.view(N * M, V * C, T)
-    #     pos = self.data_bn(pos)
-    #     pos = pos.view(N, M, V, C, T)
-    #     pos = pos.permute(0, 1, 3, 4, 2).contiguous()
-    #     pos = pos.view(N * M, C, T, V)
-    #     pos_feat = pos
-
-    #     # build Temporal Movement Field
-    #     tmf = torch.zeros_like(pos)
-    #     tmf[:,:,:-1,:] = pos[:,:,1:,:] - pos[:,:,:-1,:]
-    #     tmf[:,:,-1,:] = tmf[:,:,-2,:]
-    #     tmf_feat = tmf
-    #     # TODO: normalization
-
-    #     # build Spatial Movement Field
-    #     smf = torch.zeros_like(pos)
-    #     center = pos[:,:,:,self.graph.center].unsqueeze(-1).repeat(1, 1, 1, V)
-    #     smf = pos - center
-    #     smf_feat = smf
-    #     # TODO: normalization
 
         atten_p = self.A.unsqueeze(0).unsqueeze(0).repeat(N*M, T, 1, 1)
 
         for i in range(self.block_num):
-            pos_feat, tmf_feat, smf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, smf_feat, atten_p, i)
+            pos_feat, tmf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, atten_p, i)
 
         # global pooling
         feat = F.avg_pool2d(pos_feat, pos_feat.size()[2:])
@@ -149,13 +112,12 @@ class AttentionGenerator(nn.Module):
         super().__init__()
         self.alpha = alpha
 
-        self.conv_fusion = nn.Conv2d(in_channels*2, 64, kernel_size = 1)
+        self.conv_fusion = nn.Conv2d(in_channels, 64, kernel_size = 1)
         self.conv_atten = nn.Conv2d(128, 1, kernel_size = 1)
         self.activiation = nn.LeakyReLU(self.alpha)
         
 
-    def forward(self, smf_feat, tfm_feat, A):
-        feat = torch.cat((smf_feat, tfm_feat), 1)
+    def forward(self, feat, A):
         feat = self.conv_fusion(feat)
 
         B, C, T, V = feat.shape
@@ -199,29 +161,6 @@ class MFFModule(nn.Module):
         return feat
 
 class GCNModule(nn.Module):
-    r"""Applies a spatial temporal graph convolution over an input graph sequence.
-
-    Args:
-        in_channels (int): Number of channels in the input sequence data
-        out_channels (int): Number of channels produced by the convolution
-        kernel_size (tuple): Size of the temporal convolving kernel and graph convolving kernel
-        stride (int, optional): Stride of the temporal convolution. Default: 1
-        dropout (int, optional): Dropout rate of the final output. Default: 0
-        residual (bool, optional): If ``True``, applies a residual mechanism. Default: ``True``
-
-    Shape:
-        - Input[0]: Input graph sequence in :math:`(N, in_channels, T_{in}, V)` format
-        - Input[1]: Input graph adjacency matrix in :math:`(K, V, V)` format
-        - Output[0]: Outpu graph sequence in :math:`(N, out_channels, T_{out}, V)` format
-        - Output[1]: Graph adjacency matrix for output data in :math:`(K, V, V)` format
-
-        where
-            :math:`N` is a batch size,
-            :math:`K` is the spatial kernel size, as :math:`K == kernel_size[1]`,
-            :math:`T_{in}/T_{out}` is a length of input/output sequence,
-            :math:`V` is the number of graph nodes.
-
-    """
     def __init__(self,
                  in_channels,
                  out_channels,
@@ -267,3 +206,33 @@ class GCNModule(nn.Module):
         
 
         return self.relu(x), atten
+
+class TCNModule(nn.Module):
+    def __init__(self,
+                 in_channels,
+                 t_kernel_size=1,
+                 t_stride=1,
+                 t_dilation=1,
+                 bias=True):
+        super().__init__()
+
+        t_padding = ((t_kernel_size - 1) // 2, 0)
+
+        self.tcn = nn.Sequential(
+            nn.BatchNorm2d(in_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                in_channels,
+                in_channels,
+                kernel_size=(t_kernel_size, 1),
+                stride=(t_stride, 1),
+                padding=t_padding,
+                dilation=(t_dilation, 1),
+                bias=bias
+            ),
+            nn.BatchNorm2d(in_channels),
+        )
+
+    def forward(self, feat):
+        feat = self.tcn(feat)
+        return feat
