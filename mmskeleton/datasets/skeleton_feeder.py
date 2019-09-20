@@ -25,7 +25,7 @@ class SkeletonFeeder(torch.utils.data.Dataset):
         random_shift: If true, randomly pad zeros at the begining or end of sequence
         window_size: The length of the output sequence
         normalization: If true, normalize input sequence
-        debug: If true, only use the first 100 samples
+        debug: If true, only use the first 1000 samples
     """
     def __init__(self,
                  data_path,
@@ -58,9 +58,9 @@ class SkeletonFeeder(torch.utils.data.Dataset):
             self.data = np.load(self.data_path)
 
         if self.debug:
-            self.label = self.label[0:100]
-            self.data = self.data[0:100]
-            self.sample_name = self.sample_name[0:100]
+            self.label = self.label[0:10000]
+            self.data = self.data[0:10000]
+            self.sample_name = self.sample_name[0:10000]
 
         self.N, self.C, self.T, self.V, self.M = self.data.shape
 

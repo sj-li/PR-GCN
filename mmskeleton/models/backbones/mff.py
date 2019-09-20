@@ -6,11 +6,6 @@ import torch.optim as optim
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
 class MFFNet(nn.Module):
-    """Movemend Field Fusion Network for Skeleton-based Action Recognition
-    
-    Arguments:
-        nn {[type]} -- [description]
-    """
     def __init__(self,
                  in_channels,
                  num_class,
@@ -47,11 +42,11 @@ class MFFNet(nn.Module):
             TCNModule(128, 3, 1, 3)
         ))
         
-        self.AttenGen = nn.ModuleList((
-            AttentionGenerator(64),
-            AttentionGenerator(64),
-            AttentionGenerator(128)
-        ))
+        # self.AttenGen = nn.ModuleList((
+        #     AttentionGenerator(64),
+        #     AttentionGenerator(64),
+        #     AttentionGenerator(128)
+        # ))
 
         self.fusion = nn.ModuleList((
             MFFModule(64, 64),
@@ -63,17 +58,17 @@ class MFFNet(nn.Module):
 
         self.fcn = nn.Conv2d(128, num_class, kernel_size=1)
 
-    def BasicBlock(self, pos_feat, tmf_feat, atten_p, block_num):
-        tmf_feat, _ = self.GCN_tmf[block_num](tmf_feat, atten_p)
+    def BasicBlock(self, pos_feat, tmf_feat, atten, block_num):
+        tmf_feat, _ = self.GCN_tmf[block_num](tmf_feat, atten)
 
-        atten = self.AttenGen[block_num](tmf_feat, self.A)
+        # atten = self.AttenGen[block_num](tmf_feat, self.A)
 
         pos_feat, _ = self.GCN_pos[block_num](pos_feat, atten)
         pos_feat = self.fusion[block_num](pos_feat, tmf_feat)
 
         tmf_feat = self.TCN[block_num](tmf_feat)
 
-        return pos_feat, tmf_feat, atten
+        return pos_feat, tmf_feat
 
     def normalize(self, feat):
         N, C, T, V, M = feat.size()
@@ -98,10 +93,10 @@ class MFFNet(nn.Module):
         pos_feat = self.normalize(pos)
         tmf_feat = self.normalize(tmf)
 
-        atten_p = self.A.unsqueeze(0).unsqueeze(0).repeat(N*M, T, 1, 1)
+        atten = self.A.unsqueeze(0).unsqueeze(0).repeat(N*M, T, 1, 1)
 
         for i in range(self.block_num):
-            pos_feat, tmf_feat, atten = self.BasicBlock(pos_feat, tmf_feat, atten_p, i)
+            pos_feat, tmf_feat  = self.BasicBlock(pos_feat, tmf_feat, atten, i)
 
         # global pooling
         feat = F.avg_pool2d(pos_feat, pos_feat.size()[2:])

@@ -106,6 +106,8 @@ def train(
 
 # process a batch of data
 def batch_processor(model, datas, train_mode, loss):
+    global n_iter
+    global n_iter_acc
 
     data, label = datas
     data = data.cuda()
