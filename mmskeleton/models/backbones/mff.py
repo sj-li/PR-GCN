@@ -40,6 +40,12 @@ class MFFNet(nn.Module):
             GCNModule(64, 64),
             GCNModule(64, 128)
         ))
+
+        self.TCN = nn.ModuleList((
+            TCNModule(64, 3, 1, 1),
+            TCNModule(64, 3, 1, 2),
+            TCNModule(128, 3, 1, 3)
+        ))
         
         self.AttenGen = nn.ModuleList((
             AttentionGenerator(64),
@@ -64,6 +70,8 @@ class MFFNet(nn.Module):
 
         pos_feat, _ = self.GCN_pos[block_num](pos_feat, atten)
         pos_feat = self.fusion[block_num](pos_feat, tmf_feat)
+
+        tmf_feat = self.TCN[block_num](tmf_feat)
 
         return pos_feat, tmf_feat, atten
 
@@ -216,7 +224,8 @@ class TCNModule(nn.Module):
                  bias=True):
         super().__init__()
 
-        t_padding = ((t_kernel_size - 1) // 2, 0)
+        # t_padding = ((t_kernel_size - 1) // 2, 0)
+        t_padding = ((t_dilation*(t_kernel_size-1))//2, 0)
 
         self.tcn = nn.Sequential(
             nn.BatchNorm2d(in_channels),

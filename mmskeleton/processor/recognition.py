@@ -7,6 +7,12 @@ from mmcv.runner import Runner
 from mmcv import Config, ProgressBar
 from mmcv.parallel import MMDataParallel
 
+from tensorboardX import SummaryWriter
+
+writer = SummaryWriter()
+n_iter = 0
+n_iter_acc = 0
+
 
 def test(model_cfg, dataset_cfg, checkpoint, batch_size=64, gpus=1, workers=4):
     dataset = call_obj(**dataset_cfg)
@@ -94,6 +100,9 @@ def train(
     workflow = [tuple(w) for w in workflow]
     runner.run(data_loaders, workflow, total_epochs, loss=loss)
 
+    writer.export_scalars_to_json("./all_scalars.json")
+    writer.close()
+
 
 # process a batch of data
 def batch_processor(model, datas, train_mode, loss):
@@ -106,11 +115,17 @@ def batch_processor(model, datas, train_mode, loss):
     output = model(data)
     losses = loss(output, label)
 
+    writer.add_scalar('data/losses', losses, n_iter)
+    n_iter += 1
+
     # output
     log_vars = dict(loss=losses.item())
     if not train_mode:
         log_vars['top1'] = topk_accuracy(output, label)
         log_vars['top5'] = topk_accuracy(output, label, 5)
+        writer.add_scalar('data/top1', log_vars['top1'], n_iter_acc)
+        writer.add_scalar('data/top5', log_vars['top5'], n_iter_acc)
+        n_iter_acc += 1
 
     outputs = dict(loss=losses, log_vars=log_vars, num_samples=len(data.data))
     return outputs
