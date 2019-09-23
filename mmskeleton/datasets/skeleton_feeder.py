@@ -58,9 +58,9 @@ class SkeletonFeeder(torch.utils.data.Dataset):
             self.data = np.load(self.data_path)
 
         if self.debug:
-            self.label = self.label[0:10000]
-            self.data = self.data[0:10000]
-            self.sample_name = self.sample_name[0:10000]
+            self.label = self.label[0:1000]
+            self.data = self.data[0:1000]
+            self.sample_name = self.sample_name[0:1000]
 
         self.N, self.C, self.T, self.V, self.M = self.data.shape
 
