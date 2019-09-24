@@ -6,7 +6,7 @@ from torch.autograd import Variable
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
 
-class MFFNet(nn.Module):
+class MFFNet1(nn.Module):
     r"""Spatial temporal graph convolutional networks.
 
     Args:
@@ -55,10 +55,13 @@ class MFFNet(nn.Module):
                          False,
                          residual=False,
                          **kwargs0),
+            st_gcn_block(64, 64, kernel_size, 1, 2, False, **kwargs),
             st_gcn_block(64, 64, kernel_size, 1, 2, True, **kwargs),
             st_gcn_block(64, 128, kernel_size, 3, 1, False, **kwargs),
+            st_gcn_block(128, 128, kernel_size, 1, 2, False, **kwargs),
             st_gcn_block(128, 128, kernel_size, 1, 2, True, **kwargs),
             st_gcn_block(128, 256, kernel_size, 5, 1, False, **kwargs),
+            st_gcn_block(256, 256, kernel_size, 1, 2, False, **kwargs),
             st_gcn_block(256, 256, kernel_size, 1, 2, True, **kwargs),
         ))
 

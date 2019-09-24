@@ -3,10 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+import copy
+
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
 
-class MFFNet(nn.Module):
+class MFFNet2(nn.Module):
     r"""Spatial temporal graph convolutional networks.
 
     Args:
@@ -33,6 +35,7 @@ class MFFNet(nn.Module):
                  **kwargs):
         super().__init__()
 
+
         # load graph
         self.graph = Graph(**graph_cfg)
         A = torch.tensor(self.graph.A,
@@ -48,15 +51,9 @@ class MFFNet(nn.Module):
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
 
         self.mov_layers = nn.ModuleList((
-                        st_gcn_block(in_channels,
-                         64,
-                         (3, spatial_kernel_size),
-                         1,
-                         1,
-                         residual=False,
-                         **kwargs0),
-                        st_gcn_block(64, 64,  (3, spatial_kernel_size), 1, 1, True, **kwargs),
-                        st_gcn_block(64, 64,  (3, spatial_kernel_size), 1, 2, True, **kwargs),
+                        nn.Conv2d(in_channels, 64, (3, 1), 1, (1, 0), 1),
+                        nn.Conv2d(64, 64,  (3, 1), 1, (2, 0), 2),
+                        nn.Conv2d(64, 64,  (3, 1), 1, (3, 0), 3)
                          
         ))
 
@@ -68,25 +65,22 @@ class MFFNet(nn.Module):
                          1,
                          residual=False,
                          **kwargs0),
-                        st_gcn_block(64, 64, (1, spatial_kernel_size), 1, 2, True, **kwargs),
-                        st_gcn_block(64, 64, (1, spatial_kernel_size), 1, 4, True, **kwargs),
+                        st_gcn_block(64, 64, (1, spatial_kernel_size), 1, 2, **kwargs),
+                        st_gcn_block(64, 64, (1, spatial_kernel_size), 1, 4, **kwargs)
                          
         ))
 
         self.fusion_layers = nn.ModuleList((
-                        st_gcn_block(128, 64,  (1, spatial_kernel_size), 1, 1, True, **kwargs),
-                        st_gcn_block(128, 64,  (1, spatial_kernel_size), 1, 1, True, **kwargs),
-                        st_gcn_block(128, 64,  (1, spatial_kernel_size), 1, 1, True, **kwargs),
+                        st_gcn_block(128, 64,  (1, spatial_kernel_size), 1, 1, **kwargs),
+                        st_gcn_block(128, 64,  (1, spatial_kernel_size), 1, 1, **kwargs),
+                        st_gcn_block(128, 64,  (1, spatial_kernel_size), 1, 1, **kwargs),
                          
         ))
 
         self.posses_layers = nn.ModuleList((
             st_gcn_block(64, 128, kernel_size, 2, **kwargs),
             st_gcn_block(128, 128, kernel_size, 1, **kwargs),
-            st_gcn_block(128, 128, kernel_size, 1, **kwargs),
-            st_gcn_block(128, 256, kernel_size, 2, **kwargs),
-            st_gcn_block(256, 256, kernel_size, 1, **kwargs),
-            st_gcn_block(256, 256, kernel_size, 1, **kwargs)
+            st_gcn_block(128, 256, kernel_size, 2, **kwargs)
         ))
 
         # initialize parameters for edge importance weighting
@@ -123,17 +117,29 @@ class MFFNet(nn.Module):
         # data normalization
         N, C, T, V, M = x.size()
 
-        mov = torch.zeros_like(x)
-        mov[:,:,:-1,:,:] = x[:,:,1:,:,:] - x[:,:,:-1,:,:]
-        mov[:,:,-1,:,:] = mov[:,:,-2,:,:]
+        mov = copy.deepcopy(x)
+        mov = mov.permute(0, 4, 3, 2, 1).contiguous()
+        mov = mov.view(N*M, V, T, C)
+        mov[:,:,:-1,:] = mov[:,:,1:,:] - mov[:,:,:-1,:]
+        mov[:,:,-1,:] = mov[:,:,-2,:]
+        mov = mov.permute(0, 1, 3, 2).contiguous()
+        mov = mov.view(N * M, V * C, T)
+        mov = self.data_bn(mov)
+        mov = mov.view(N, M, V, C, T)
+        mov = mov.permute(0, 1, 3, 4, 2).contiguous()
+        mov = mov.view(N * M, C, T, V)
 
-        x = self.normalize(x)
-        mov = self.normalize(mov)
+        x = x.permute(0, 4, 3, 1, 2).contiguous()
+        x = x.view(N * M, V * C, T)
+        x = self.data_bn(x)
+        x = x.view(N, M, V, C, T)
+        x = x.permute(0, 1, 3, 4, 2).contiguous()
+        x = x.view(N * M, C, T, V)
 
         # forwad
         for l_pos, l_mov, l_fusion, importance in zip(self.pos_layers, self.mov_layers, self.fusion_layers, self.edge_importance_fusion):
             x = l_pos(x, self.A * importance)
-            mov = l_mov(mov, self.A * importance)
+            mov = l_mov(mov)
             x = l_fusion(torch.cat([x, mov], 1), self.A * importance)
 
         for l, importance in zip(self.posses_layers, self.edge_importance):
