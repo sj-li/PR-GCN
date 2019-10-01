@@ -14,7 +14,7 @@ n_iter = 0
 n_iter_acc = 0
 
 
-def test(model_cfg, dataset_cfg, checkpoint, batch_size=64, gpus=1, workers=4):
+def test(model_cfg, dataset_cfg, checkpoint, batch_size=64, gpus=1, workers=2):
     dataset = call_obj(**dataset_cfg)
     data_loader = torch.utils.data.DataLoader(dataset=dataset,
                                               batch_size=batch_size,
@@ -60,7 +60,7 @@ def train(
         workflow=[('train', 1)],
         gpus=1,
         log_level=0,
-        workers=4,
+        workers=2,
         resume_from=None,
         load_from=None,
 ):

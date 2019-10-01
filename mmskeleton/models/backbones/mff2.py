@@ -117,17 +117,17 @@ class MFFNet2(nn.Module):
         # data normalization
         N, C, T, V, M = x.size()
 
-        mov = copy.deepcopy(x)
-        mov = mov.permute(0, 4, 3, 2, 1).contiguous()
-        mov = mov.view(N*M, V, T, C)
-        mov[:,:,:-1,:] = mov[:,:,1:,:] - mov[:,:,:-1,:]
-        mov[:,:,-1,:] = mov[:,:,-2,:]
-        mov = mov.permute(0, 1, 3, 2).contiguous()
-        mov = mov.view(N * M, V * C, T)
-        mov = self.data_bn(mov)
-        mov = mov.view(N, M, V, C, T)
-        mov = mov.permute(0, 1, 3, 4, 2).contiguous()
-        mov = mov.view(N * M, C, T, V)
+        # mov = copy.deepcopy(x)
+        # mov = mov.permute(0, 4, 3, 2, 1).contiguous()
+        # mov = mov.view(N*M, V, T, C)
+        # mov[:,:,:-1,:] = mov[:,:,1:,:] - mov[:,:,:-1,:]
+        # mov[:,:,-1,:] = mov[:,:,-2,:]
+        # mov = mov.permute(0, 1, 3, 2).contiguous()
+        # mov = mov.view(N * M, V * C, T)
+        # mov = self.data_bn(mov)
+        # mov = mov.view(N, M, V, C, T)
+        # mov = mov.permute(0, 1, 3, 4, 2).contiguous()
+        # mov = mov.view(N * M, C, T, V)
 
         x = x.permute(0, 4, 3, 1, 2).contiguous()
         x = x.view(N * M, V * C, T)
@@ -135,6 +135,15 @@ class MFFNet2(nn.Module):
         x = x.view(N, M, V, C, T)
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
+
+        mov = torch.zeros_like(x)
+        mov.copy_(x)
+        mov = mov.permute(0, 3, 2, 1).contiguous() # (N*M, V, T, C)
+        mov[:,:,:-1,:] = mov[:,:,1:,:] - mov[:,:,:-1,:]
+        mov[:,:,-1,:] = mov[:,:,-2,:]
+        mov = mov.permute(0, 3, 2, 1).contiguous()
+        
+
 
         # forwad
         for l_pos, l_mov, l_fusion, importance in zip(self.pos_layers, self.mov_layers, self.fusion_layers, self.edge_importance_fusion):
