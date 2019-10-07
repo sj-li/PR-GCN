@@ -43,13 +43,13 @@ processor_cfg:
       # debug: true
 
   # dataloader setting
-  batch_size: 64
-  gpus: 1
+  batch_size: 128
+  gpus: 2
 
   # optimizer setting
   optimizer_cfg:
     name: 'torch.optim.SGD'
-    lr: 0.1
+    lr: 0.03
     momentum: 0.9
     nesterov: true
     weight_decay: 0.0001

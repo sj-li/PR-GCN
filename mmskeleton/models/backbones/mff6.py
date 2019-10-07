@@ -3,30 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 
-import copy
-
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
 
 class MFFNet6(nn.Module):
-    r"""Spatial temporal graph convolutional networks.
-
-    Args:
-        in_channels (int): Number of channels in the input data
-        num_class (int): Number of classes for the classification task
-        graph_cfg (dict): The arguments for building the graph
-        edge_importance_weighting (bool): If ``True``, adds a learnable
-            importance weighting to the edges of the graph
-        **kwargs (optional): Other parameters for graph convolution units
-
-    Shape:
-        - Input: :math:`(N, in_channels, T_{in}, V_{in}, M_{in})`
-        - Output: :math:`(N, num_class)` where
-            :math:`N` is a batch size,
-            :math:`T_{in}` is a length of input sequence,
-            :math:`V_{in}` is the number of graph nodes,
-            :math:`M_{in}` is the number of instance in a frame.
-    """
     def __init__(self,
                  in_channels,
                  num_class,
@@ -48,52 +28,52 @@ class MFFNet6(nn.Module):
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
         self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
-        self.st_gcn_networks = nn.ModuleList((
-            st_gcn_block(in_channels,
-                         64,
-                         kernel_size,
-                         1,
-                         residual=False,
-                         **kwargs0),
-            st_gcn_block(64, 64, kernel_size, 1, **kwargs),
-            st_gcn_block(64, 64, kernel_size, 1, **kwargs),
-            # st_gcn_block(64, 64, kernel_size, 1, **kwargs),
-            st_gcn_block(64, 128, kernel_size, 2, **kwargs),
-            st_gcn_block(128, 128, kernel_size, 1, **kwargs),
-            st_gcn_block(128, 128, kernel_size, 1, **kwargs),
-            st_gcn_block(128, 256, kernel_size, 2, **kwargs),
-            # st_gcn_block(256, 256, kernel_size, 1, **kwargs),
-            st_gcn_block(256, 256, kernel_size, 1, **kwargs),
+
+        self.conv_shift_1 = nn.Conv2d(3, 64, 1)
+        self.gcn_shift_1 = gcn(64, 128, 3)
+        self.gcn_shift_2= gcn(128, 128, 3)
+        self.conv_shift_2 = nn.Conv2d(128, 3, 1)
+
+        self.A_shift_1 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+        self.A_shift_2 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+
+        self.tcn_motion_in = tcn(in_channels, 64, 3, 1, 1, residual=False)
+        self.tcn_pos_in_1 = tcn(in_channels, 64, 3, 1, 1, residual=False)
+        self.tcn_pos_in_2 = tcn(in_channels, 64, 3, 1, 1, residual=False)
+        self.conv_fusion_in = nn.Conv2d(128, 64, 1)
+
+        self.tcn = nn.ModuleList((
+            tcn(64, 64, 3, 1, 1, residual=False),
+            tcn(64, 64, 3, 2, 1, residual=False),
+            tcn(64, 64, 3, 1, 1, residual=False),
+            tcn(64, 64, 3, 3, 1, residual=False)
         ))
 
-        # initialize parameters for edge importance weighting
-        if edge_importance_weighting:
-            self.edge_importance = nn.ParameterList([
-                nn.Parameter(torch.ones(self.A.size()))
-                for i in self.st_gcn_networks
+        self.gcn = nn.ModuleList((
+            gcn(128, 64,  3),
+            gcn(128, 64,  3),
+            gcn(128, 64,  3),
+            gcn(128, 256, 3)
+        ))
+        self.A =  nn.ParameterList([
+                nn.Parameter(A + 0.0001*torch.ones(A.size()))
+                for i in self.gcn
             ])
-        else:
-            self.edge_importance = [1] * len(self.st_gcn_networks)
+
+        self.conv_trans = nn.Conv2d(256, 128, 1)
+        self.conv_gather = nn.Conv2d(256, 256, 1)
+
+        self.conv_fusion = nn.ModuleList((
+            nn.Conv2d(128, 128, 1),
+            nn.Conv2d(128, 128, 1),
+            nn.Conv2d(128, 128, 1),
+            nn.Conv2d(128, 128, 1)
+        ))
+
+        self.soft = nn.Softmax(-2)
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
-
-        self.gcn_trans = nn.ModuleList((
-            st_gcn_block(in_channels, 128, (3, A.size(0)), 1),         
-            st_gcn_block(128, 128, (3, A.size(0)), 1)        
-        ))
-
-        self.fcn_trans = nn.Sequential(
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 8, 1)    
-        )
-
-        self.trans_edge_importance = nn.ParameterList([
-                nn.Parameter(torch.ones(self.A.size()))
-                for i in self.gcn_trans
-            ])
-
 
 
     def forward(self, x):
@@ -107,98 +87,165 @@ class MFFNet6(nn.Module):
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
-        pos = x.clone()
+        shift = self.conv_shift_1(x)
+        shift = self.gcn_shift_1(shift, self.A_shift_1)
+        shift = self.gcn_shift_2(shift, self.A_shift_2)
+        shift = self.conv_shift_2(shift)
+        shift[:, 2, :, :] = 0
+        
+        x = x + shift
 
-        for gcn, importance in zip(self.gcn_trans, self.trans_edge_importance):
-            x, _ = gcn(x, self.A * importance)
-
-        trans = self.fcn_trans(x)
-        x = self.transform(pos, trans)
+        motion = torch.zeros_like(x)
+        motion[:,:,1:,:] = x[:,:,1:,:] - x[:,:,:-1,:]
 
         # forwad
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
+        motion = self.tcn_motion_in(motion)
+        x_ = self.tcn_pos_in_1(x)
+        x = self.tcn_pos_in_2(x)
+        x = self.conv_fusion_in(torch.cat([x, motion], 1))
 
+        feats = []
+        for tcn in self.tcn:
+            x = tcn(x)
+            feats.append(x)
+
+        feats = feats[::-1]
+
+        x = x_
+        for gcn, conv_f, f, A_ in zip(self.gcn, self.conv_fusion, feats, self.A):
+            if x.shape[2] > f.shape[2]:
+                x = self.scale_T(x, f.shape[2])
+            if x.shape[2] < f.shape[2]:
+                f = self.scale_T(f, x.shape[2])
+            x = conv_f(torch.cat([x, f], 1))
+            x = gcn(x, A_)
+
+
+        x_ = self.conv_trans(x)
+        x1 = x_.permute(0, 3, 1, 2).contiguous().view(N*M, V, -1)
+        x2 = x_.view(N*M, -1, V)
+        A = self.soft(torch.matmul(x1, x2) / x1.size(-1))
+        x = x.view(N*M, -1, V)
+        x = self.conv_gather(torch.matmul(x, A).view(N*M, 256, -1, V))
+
+        print("1",x.shape)
+            
         # global pooling
-        x = F.avg_pool2d(x, x.size()[2:])
+        x = F.max_pool2d(x, x.size()[2:])
+        print("2",x.shape)
         x = x.view(N, M, -1, 1, 1).mean(dim=1)
 
+        print("3",x.shape)
+        exit()
         # prediction
         x = self.fcn(x)
         x = x.view(x.size(0), -1)
 
         return x
 
-    # x: (B, 3, T, V)
-    # trans: (B, 8, T, V)
-    def transform(self, x, trans):
-        N, C, T, V = trans.size()
-        trans = trans.permute(0, 2, 3, 1).contiguous()
-        trans_m = torch.ones(N, T, V, C+1)
-        trans_m[:,:,:,:-1] = trans
-        trans_m = trans_m.view(N, T, V, 3, 3)
+    def scale_T(self, x, newT):
+        N, C, T, V = x.shape
+        x = x.view(N, C, newT, T//newT, V)
+        x, _ = torch.max(x, 3)
+        # print(type(x))
+        # print(x.shape)
+        # exit()
+        x = x.squeeze()
 
-        x = x.permute(0, 2, 3, 1).contiguous()
-        x_acc = x[:,:,:,-1].clone()
-        x[:,:,:,-1] = 1
+        return x
 
-        # print(trans_m.device, x.device)
-        x = torch.matmul(trans_m.cuda(), x.cuda().unsqueeze(-1)).squeeze()
-        x = x/x[:,:,:,-1].unsqueeze_(-1)
-        x[:,:,:,-1] = x_acc
-        x = x.permute(0, 3, 1, 2).contiguous()
+def diffpooling(x, A, conv_embed, conv_pool):
+    # x (N, C, V)
+    z = conv_embed(x) # (N, C', V)
+    z = torch.matmul(z, A)
 
-        return x.cuda()
+    S = conv_pool(x)  # (N, V', V)
+    S = torch.matmul(S, A)
 
-    def extract_feature(self, x):
+    x = torch.matmul(z, S.transpose(1, 2))
+    A = torch.matmul(S, torch.matmul(A, S.transpose(1, 2)))
 
-        # data normalization
-        N, C, T, V, M = x.size()
-        x = x.permute(0, 4, 3, 1, 2).contiguous()
-        x = x.view(N * M, V * C, T)
-        x = self.data_bn(x)
-        x = x.view(N, M, V, C, T)
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = x.view(N * M, C, T, V)
+    return x, A
+        
 
-        # forwad
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
+class tcn(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, dilation, dropout=0, residual=True):
+        super().__init__()
 
-        _, c, t, v = x.size()
-        feature = x.view(N, M, c, t, v).permute(0, 2, 3, 4, 1)
+        padding = ((kernel_size - 1)*dilation // 2, 0)
 
-        # prediction
-        x = self.fcn(x)
-        output = x.view(N, M, -1, t, v).permute(0, 2, 3, 4, 1)
+        self.tcn = nn.Sequential(
+            nn.BatchNorm2d(in_channels),
+            # nn.ReLU(inplace=True),
+            nn.Conv2d(
+                in_channels,
+                out_channels,
+                (kernel_size, 1),
+                (stride, 1),
+                padding,
+                (dilation, 1)
+            ),
+            nn.BatchNorm2d(out_channels),
+            nn.Dropout(dropout, inplace=True),
+        )
 
-        return output, feature
+        if not residual:
+            self.residual = lambda x: 0
+
+        elif (in_channels == out_channels) and (stride == 1):
+            self.residual = lambda x: x
+
+        else:
+            self.residual = nn.Sequential(
+                nn.Conv2d(in_channels,
+                          out_channels,
+                          kernel_size=1,
+                          stride=(stride, 1)),
+                nn.BatchNorm2d(out_channels),
+            )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        res = self.residual(x)
+        x = self.tcn(x)
+        x = x + res
+
+        return self.relu(x)
+
+class gcn(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, residual=True):
+        super().__init__()
+
+        self.gcn = ConvTemporalGraphical(in_channels, out_channels, kernel_size)
+        self.bn = nn.BatchNorm2d(out_channels)
+
+        if not residual:
+            self.residual = lambda x: 0
+
+        elif (in_channels == out_channels) and (stride == 1):
+            self.residual = lambda x: x
+
+        else:
+            self.residual = nn.Sequential(
+                nn.Conv2d(in_channels,
+                          out_channels,
+                          kernel_size=1,
+                          stride=(stride, 1)),
+                nn.BatchNorm2d(out_channels),
+            )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x, A):
+        res = self.residual(x)
+        x, _ = self.gcn(x, A)
+        x = self.bn(x) + res
+
+        return self.relu(x)
 
 
 class st_gcn_block(nn.Module):
-    r"""Applies a spatial temporal graph convolution over an input graph sequence.
-
-    Args:
-        in_channels (int): Number of channels in the input sequence data
-        out_channels (int): Number of channels produced by the convolution
-        kernel_size (tuple): Size of the temporal convolving kernel and graph convolving kernel
-        stride (int, optional): Stride of the temporal convolution. Default: 1
-        dropout (int, optional): Dropout rate of the final output. Default: 0
-        residual (bool, optional): If ``True``, applies a residual mechanism. Default: ``True``
-
-    Shape:
-        - Input[0]: Input graph sequence in :math:`(N, in_channels, T_{in}, V)` format
-        - Input[1]: Input graph adjacency matrix in :math:`(K, V, V)` format
-        - Output[0]: Outpu graph sequence in :math:`(N, out_channels, T_{out}, V)` format
-        - Output[1]: Graph adjacency matrix for output data in :math:`(K, V, V)` format
-
-        where
-            :math:`N` is a batch size,
-            :math:`K` is the spatial kernel size, as :math:`K == kernel_size[1]`,
-            :math:`T_{in}/T_{out}` is a length of input/output sequence,
-            :math:`V` is the number of graph nodes.
-
-    """
     def __init__(self,
                  in_channels,
                  out_channels,

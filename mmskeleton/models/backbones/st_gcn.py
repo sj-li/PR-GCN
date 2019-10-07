@@ -47,12 +47,12 @@ class ST_GCN(nn.Module):
         self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
         self.st_gcn_networks = nn.ModuleList((
-            st_gcn_block(in_channels,
-                         64,
-                         kernel_size,
-                         1,
-                         residual=False,
-                         **kwargs0),
+            # st_gcn_block(in_channels,
+            #              64,
+            #              kernel_size,
+            #              1,
+            #              residual=False,
+            #              **kwargs0),
             st_gcn_block(64, 64, kernel_size, 1, **kwargs),
             st_gcn_block(64, 64, kernel_size, 1, **kwargs),
             st_gcn_block(64, 64, kernel_size, 1, **kwargs),
@@ -72,6 +72,18 @@ class ST_GCN(nn.Module):
             ])
         else:
             self.edge_importance = [1] * len(self.st_gcn_networks)
+            
+        self.conv_shift_1 = nn.Conv2d(3, 64, 1)
+        self.gcn_shift_1 = st_gcn_block(64, 128, kernel_size, 1)
+        self.gcn_shift_2= st_gcn_block(128, 128, kernel_size, 1)
+        self.conv_shift_2 = nn.Conv2d(128, 3, 1)
+
+        self.A_shift_1 = nn.Parameter(torch.ones(self.A.size()))
+        self.A_shift_2 = nn.Parameter(torch.ones(self.A.size()))
+
+        self.tcn_motion_in = nn.Conv2d(in_channels, 64, 1)
+        self.tcn_pos_in = nn.Conv2d(in_channels, 64, 1)
+        self.conv_fusion_in = nn.Conv2d(128, 64, 1)
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
@@ -86,6 +98,20 @@ class ST_GCN(nn.Module):
         x = x.view(N, M, V, C, T)
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
+
+        shift = self.conv_shift_1(x)
+        shift, _ = self.gcn_shift_1(shift, self.A_shift_1*self.A)
+        shift, _ = self.gcn_shift_2(shift, self.A_shift_2*self.A)
+        shift = self.conv_shift_2(shift)
+
+        x = x + shift
+
+        motion = torch.zeros_like(x)
+        motion[:,:,1:,:] = x[:,:,1:,:] - x[:,:,:-1,:]
+        
+        motion = self.tcn_motion_in(motion)
+        x = self.tcn_pos_in(x)
+        x = self.conv_fusion_in(torch.cat([x, motion], 1))
 
         # forwad
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):

@@ -47,42 +47,66 @@ class MFFNet7(nn.Module):
         self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))
         kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
 
-        self.gcn_in = gcn(in_channels, 64, 3, 1, residual=False)
-        self.A_in = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
+        self.conv_shift_1 = nn.Conv2d(3, 64, 1)
+        self.gcn_shift_1 = gcn(64, 128, 3)
+        self.gcn_shift_2= gcn(128, 128, 3)
+        self.conv_shift_2 = nn.Conv2d(128, 3, 1)
 
-        self.gcn_in_1 =  gcn(64, 64, 3, 1)
-        self.gcn_in_2 =  gcn(64, 64, 3, 1)
-        self.gcn_in_3 =  gcn(64, 64, 3, 1)
-        self.gcn_in_4 =  gcn(64, 64, 3, 1)
+        self.A_shift_1 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+        self.A_shift_2 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
 
-        self.A_in_1 = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
-        self.A_in_2 = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
-        self.A_in_3 = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
-        self.A_in_4 = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
+        self.tcn_motion_in = tcn(in_channels, 64, 3, 1, 1, residual=False)
+        self.tcn_pos_in_1 = tcn(in_channels, 64, 3, 1, 1, residual=False)
+        self.tcn_pos_in_2 = tcn(in_channels, 64, 3, 1, 1, residual=False)
+        self.conv_fusion_in = nn.Conv2d(128, 64, 1)
 
-        self.gcn_out_1 =  gcn(128, 256, 3, 1)
-        self.gcn_out_2 =  gcn(128, 64, 3, 1)
-        self.gcn_out_3 =  gcn(128, 64, 3, 1)
-        self.gcn_out_4 =  gcn(128, 64, 3, 1)        
+        self.tcn = nn.ModuleList((
+            tcn(64, 64, 3, 1, 1, residual=False),
+            tcn(64, 64, 3, 2, 1, residual=False),
+            tcn(64, 64, 3, 1, 1, residual=False),
+            # tcn(64, 64, 3, 1, 4, residual=False),
+            tcn(64, 64, 3, 3, 1, residual=False)
+        ))
 
-        self.A_out_1 = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
-        self.A_out_2 = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
-        self.A_out_3 = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
-        self.A_out_4 = nn.Parameter(A + 0.1*torch.ones(self.A.size()))
+        self.gcn = nn.ModuleList((
+            gcn(128, 64,  3),
+            gcn(128, 64,  3),
+            # gcn(128, 64,  3, residual=False),
+            gcn(128, 64,  3),
+            gcn(128, 256, 3)
+        ))
+        self.A =  nn.ParameterList([
+                nn.Parameter(A + 0.0001*torch.ones(A.size()))
+                for i in self.gcn
+            ])
 
-        self.tcn_1 = tcn(64, 128, 3, 1, 1)
-        self.tcn_2 = tcn(128, 128, 3, 1, 2)
-        self.tcn_3 = tcn(128, 128, 3, 1, 4)
-        self.tcn_4 = tcn(128, 64, 3, 1, 8)
+        self.conv_trans = nn.Conv2d(256, 128, 1)
+        self.conv_gather = nn.Conv2d(256, 256, 1)
 
-        self.conv_f_1 = nn.Conv2d(128, 128, 1)
-        self.conv_f_2 = nn.Conv2d(128, 128, 1)
-        self.conv_f_3 = nn.Conv2d(128, 128, 1)
-        self.conv_f_4 = nn.Conv2d(128, 128, 1)
+        # self.tcn_ = nn.ModuleList((
+        #     tcn(64, 64, 3, 1, 1, residual=False),
+        #     tcn(64, 64, 3, 1, 1, residual=False),
+        #     tcn(64, 64, 3, 1, 1, residual=False),
+        #     tcn(64, 64, 3, 1, 1, residual=False),
+        #     tcn(256, 256, 3, 1, 1, residual=False)
+        # ))
 
+        self.conv_fusion = nn.ModuleList((
+            nn.Conv2d(128, 128, 1),
+            nn.Conv2d(128, 128, 1),
+            nn.Conv2d(128, 128, 1),
+            # nn.Conv2d(128, 128, 1),
+            nn.Conv2d(128, 128, 1)
+        ))
+
+        # self.gcn_out = gcn(256, 256, 3)
+        # self.A_out =  nn.Parameter(A + 0.0001*torch.ones(A.size()))
+
+        self.soft = nn.Softmax(-2)
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
+
 
     def forward(self, x):
 
@@ -95,28 +119,50 @@ class MFFNet7(nn.Module):
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
+        shift = self.conv_shift_1(x)
+        shift = self.gcn_shift_1(shift, self.A_shift_1)
+        shift = self.gcn_shift_2(shift, self.A_shift_2)
+        shift = self.conv_shift_2(shift)
+        shift[:, 2, :, :] = 0
+        
+        x = x + shift
+
+        motion = torch.zeros_like(x)
+        motion[:,:,1:,:] = x[:,:,1:,:] - x[:,:,:-1,:]
+
         # forwad
+        motion = self.tcn_motion_in(motion)
+        x_ = self.tcn_pos_in_1(x)
+        x = self.tcn_pos_in_2(x)
+        x = self.conv_fusion_in(torch.cat([x, motion], 1))
 
-        x = self.gcn_in(x, self.A_in)
+        feats = []
+        for tcn in self.tcn:
+            x = tcn(x)
+            feats.append(x)
 
-        x1 = self.gcn_in_1(x, self.A_in_1)
-        x2 = self.gcn_in_2(x1, self.A_in_2)
-        x3 = self.gcn_in_3(x2, self.A_in_3)
-        x4  = self.gcn_in_4(x3, self.A_in_4)
+        feats = feats[::-1]
 
-        x = x4
-        x = self.tcn_1(x)
-        x = self.tcn_2(x)
-        x = self.tcn_3(x)
-        x = self.tcn_4(x)
+        x = x_
+        for gcn, conv_f, f, A_ in zip(self.gcn, self.conv_fusion, feats, self.A):
+            if x.shape[2] > f.shape[2]:
+                x = self.scale_T(x, f.shape[2])
+            if x.shape[2] < f.shape[2]:
+                f = self.scale_T(f, x.shape[2])
+            x = conv_f(torch.cat([x, f], 1))
+            x = gcn(x, A_)
 
-        x3 = self.gcn_out_4(self.conv_f_4(torch.cat([x, x4], 1)), self.A_out_4)
-        x2 = self.gcn_out_3(self.conv_f_3(torch.cat([x, x3], 1)), self.A_out_3)
-        x1 = self.gcn_out_2(self.conv_f_2(torch.cat([x, x2], 1)), self.A_out_2)
-        x  = self.gcn_out_1(self.conv_f_1(torch.cat([x, x1], 1)), self.A_out_1)
+        # x = self.gcn_out(x, self.A_out)
+
+        x_ = self.conv_trans(x)
+        x1 = x_.permute(0, 3, 1, 2).contiguous().view(N*M, V, -1)
+        x2 = x_.view(N*M, -1, V)
+        A = self.soft(torch.matmul(x1, x2) / x1.size(-1))
+        x = x.view(N*M, -1, V)
+        x = self.conv_gather(torch.matmul(x, A).view(N*M, 256, -1, V))
             
         # global pooling
-        x = F.avg_pool2d(x, x.size()[2:])
+        x = F.max_pool2d(x, x.size()[2:])
         x = x.view(N, M, -1, 1, 1).mean(dim=1)
 
         # prediction
@@ -125,30 +171,17 @@ class MFFNet7(nn.Module):
 
         return x
 
-    def extract_feature(self, x):
+    def scale_T(self, x, newT):
+        N, C, T, V = x.shape
+        x = x.view(N, C, newT, T//newT, V)
+        x, _ = torch.max(x, 3)
+        # print(type(x))
+        # print(x.shape)
+        # exit()
+        x = x.squeeze()
 
-        # data normalization
-        N, C, T, V, M = x.size()
-        x = x.permute(0, 4, 3, 1, 2).contiguous()
-        x = x.view(N * M, V * C, T)
-        x = self.data_bn(x)
-        x = x.view(N, M, V, C, T)
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = x.view(N * M, C, T, V)
-
-        # forwad
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
-
-        _, c, t, v = x.size()
-        feature = x.view(N, M, c, t, v).permute(0, 2, 3, 4, 1)
-
-        # prediction
-        x = self.fcn(x)
-        output = x.view(N, M, -1, t, v).permute(0, 2, 3, 4, 1)
-
-        return output, feature
-
+        return x
+        
 
 class tcn(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, dilation, dropout=0, residual=True):
@@ -158,7 +191,7 @@ class tcn(nn.Module):
 
         self.tcn = nn.Sequential(
             nn.BatchNorm2d(in_channels),
-            nn.ReLU(inplace=True),
+            # nn.ReLU(inplace=True),
             nn.Conv2d(
                 in_channels,
                 out_channels,
@@ -200,6 +233,7 @@ class gcn(nn.Module):
         super().__init__()
 
         self.gcn = ConvTemporalGraphical(in_channels, out_channels, kernel_size)
+        self.bn = nn.BatchNorm2d(out_channels)
 
         if not residual:
             self.residual = lambda x: 0
@@ -221,7 +255,7 @@ class gcn(nn.Module):
     def forward(self, x, A):
         res = self.residual(x)
         x, _ = self.gcn(x, A)
-        x = x + res
+        x = self.bn(x) + res
 
         return self.relu(x)
 

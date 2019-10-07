@@ -49,7 +49,7 @@ processor_cfg:
   # optimizer setting
   optimizer_cfg:
     name: 'torch.optim.SGD'
-    lr: 0.04
+    lr: 0.03
     momentum: 0.9
     nesterov: true
     weight_decay: 0.0001

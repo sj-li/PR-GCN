@@ -43,13 +43,13 @@ processor_cfg:
       # debug: true
 
   # dataloader setting
-  batch_size: 32
-  gpus: 1
+  batch_size: 256
+  gpus: 2
 
   # optimizer setting
   optimizer_cfg:
     name: 'torch.optim.SGD'
-    lr: 0.01
+    lr: 0.1
     momentum: 0.9
     nesterov: true
     weight_decay: 0.0001
@@ -62,7 +62,7 @@ processor_cfg:
   training_hooks:
     lr_config:
       policy: 'step'
-      step: [20, 30, 40, 50]
+      step: [10, 15, 20, 25, 30, 35, 40, 45, 50]
     log_config:
       interval: 100
       hooks:

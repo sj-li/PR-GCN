@@ -15,7 +15,7 @@ processor_cfg:
 
   # model setting
   model_cfg:
-    name: ".models.backbones.MFFNet"
+    name: ".models.backbones.MFFNet8"
     in_channels: 3
     num_class: 400
     edge_importance_weighting: True
@@ -31,5 +31,5 @@ processor_cfg:
     # debug: true
 
   # dataloader setting
-  batch_size: 256
-  gpus: 4
+  batch_size: 64
+  gpus: 1
