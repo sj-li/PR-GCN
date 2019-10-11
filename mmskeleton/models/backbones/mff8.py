@@ -7,24 +7,6 @@ from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
 
 class MFFNet8(nn.Module):
-    r"""Spatial temporal graph convolutional networks.
-
-    Args:
-        in_channels (int): Number of channels in the input data
-        num_class (int): Number of classes for the classification task
-        graph_cfg (dict): The arguments for building the graph
-        edge_importance_weighting (bool): If ``True``, adds a learnable
-            importance weighting to the edges of the graph
-        **kwargs (optional): Other parameters for graph convolution units
-
-    Shape:
-        - Input: :math:`(N, in_channels, T_{in}, V_{in}, M_{in})`
-        - Output: :math:`(N, num_class)` where
-            :math:`N` is a batch size,
-            :math:`T_{in}` is a length of input sequence,
-            :math:`V_{in}` is the number of graph nodes,
-            :math:`M_{in}` is the number of instance in a frame.
-    """
     def __init__(self,
                  in_channels,
                  num_class,
@@ -42,10 +24,10 @@ class MFFNet8(nn.Module):
 
         # build networks
         self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))
-        kwargs0 = {k: v for k, v in kwargs.items() if k != 'dropout'}
 
         self.conv_shift_1 = nn.Conv2d(3, 64, 1)
-        self.gcn_shift_1 = gcn_o(64, 128, 3)
+        self.gcn_shift_1 = gcn_o(64, 64, 3)
+        self.tcn_shift = tcn(64, 128, 3, 1, 1, residual=False)
         self.gcn_shift_2= gcn_o(128, 128, 3)
         self.conv_shift_2 = nn.Conv2d(128, 3, 1)
 
@@ -68,7 +50,7 @@ class MFFNet8(nn.Module):
             gcn_o(128, 64, 3),
             gcn_o(128, 64, 3),
             gcn_o(128, 64, 3),
-            gcn_o(256, 256, 3)
+            gcn_o(128, 256, 3)
         ))
 
         self.As =  nn.ParameterList([
@@ -76,24 +58,42 @@ class MFFNet8(nn.Module):
                 for i in self.gcn
             ])
 
-        self.conv_fusion = nn.ModuleList((
-            nn.Conv2d(128, 128, 1),
-            nn.Conv2d(128, 128, 1),
-            nn.Conv2d(128, 128, 1),
-            nn.Conv2d(128, 256, 1)
-        ))
+        # self.gcn_end = gcn_o(256, 256, 3)
+        # self.A_end = nn.Parameter(A + 0.0001*torch.ones(A.size()))
 
-        self.gcn_gather = gcn(256, 256)
-        self.A_gather = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+        self.gcn_gather_1 = gcn(256, 256)
+        self.gcn_gather_2 = gcn(256, 256)
 
-
-        # self.conv_trans = nn.Conv2d(256, 128, 1)
-        # self.conv_gather = nn.Conv2d(256, 256, 1)
-        # self.soft = nn.Softmax(-2)
+        # self.conv_part = nn.Conv1d(256, 256, 1)
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
 
+        self.parts = [
+           [0, 1, 14, 15, 16, 17],
+           [2, 3, 4],
+           [5, 6, 7],
+           [8, 9, 10],
+           [11, 12, 13]
+        ]
+
+        # self.head = [0, 1, 14, 15, 16, 17]
+        # self.rarm = [2, 3, 4]
+        # self.larm = [5, 6, 7]
+        # self.rleg = [8, 9, 10]
+        # self.lleg = [11, 12, 13]
+
+    def shift_adjust(self, x):
+        shift = self.conv_shift_1(x)
+        shift = self.gcn_shift_1(shift, self.A_shift_1)
+        shift = self.tcn_shift(shift)
+        shift = self.gcn_shift_2(shift, self.A_shift_2)
+        shift = self.conv_shift_2(shift)
+        shift[:, 2, :, :] = 0
+
+        x = x + shift
+
+        return x
 
     def forward(self, x):
 
@@ -106,13 +106,7 @@ class MFFNet8(nn.Module):
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
-        shift = self.conv_shift_1(x)
-        shift = self.gcn_shift_1(shift, self.A_shift_1)
-        shift = self.gcn_shift_2(shift, self.A_shift_2)
-        shift = self.conv_shift_2(shift)
-        shift[:, 2, :, :] = 0
-        
-        x = x + shift
+        x = self.shift_adjust(x)
 
         motion = torch.zeros_like(x)
         motion[:,:,1:,:] = x[:,:,1:,:] - x[:,:,:-1,:]
@@ -131,26 +125,29 @@ class MFFNet8(nn.Module):
         feats = feats[::-1]
 
         x = x_
-        for gcn, conv_f, A_, f, in zip(self.gcn, self.conv_fusion, self.As, feats):
+        for gcn, A_, f, in zip(self.gcn, self.As, feats):
             if x.shape[2] > f.shape[2]:
                 x = self.scale_T(x, f.shape[2])
             if x.shape[2] < f.shape[2]:
                 f = self.scale_T(f, x.shape[2])
-            x = conv_f(torch.cat([x, f], 1))
-            x = gcn(x, A_)
+            x = gcn(torch.cat([x, f], 1), A_)
 
-        x = self.gcn_gather(x, self.A_gather)
+        x = self.gcn_gather_1(x)
 
-        # x_ = self.conv_trans(x)
-        # x1 = x_.permute(0, 3, 1, 2).contiguous().view(N*M, V, -1)
-        # x2 = x_.view(N*M, -1, V)
-        # A = self.soft(torch.matmul(x1, x2) / x1.size(-1))
-        # x = x.view(N*M, -1, V)
-        # x = self.conv_gather(torch.matmul(x, A).view(N*M, 256, -1, V))
-            
-        # global pooling
-        x = F.max_pool2d(x, x.size()[2:])
-        x = x.view(N, M, -1, 1, 1).mean(dim=1)
+        # x = F.max_pool2d(x, (1, x.size()[3]))
+        # x = self.gcn_end(x, self.A_end)
+        x = F.max_pool2d(x, (x.size()[2], 1)).squeeze()
+        x_tmp = torch.zeros(x.size()[0], x.size()[1], len(self.parts))
+        x_tmp = x_tmp.cuda(x.get_device())
+        for i in range(len(self.parts)):
+            # print(i, len(self.parts[i]), x_tmp[:,:,i].shape, x[:,:,self.parts[i]].shape)
+            x_tmp[:,:,i] = F.max_pool1d(x[:,:,self.parts[i]], len(self.parts[i])).squeeze()
+        # x = self.conv_part(x_tmp)
+        x = x.unsqueeze(2)
+        x = self.gcn_gather_2(x)
+        x = x.squeeze()
+        x = F.max_pool1d(x, x.size()[2])
+        x, _ = x.view(N, M, -1, 1, 1).max(dim=1)
 
         # prediction
         x = self.fcn(x)
@@ -166,7 +163,6 @@ class MFFNet8(nn.Module):
 
         return x
         
-
 class tcn(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, dilation, dropout=0, residual=True):
         super().__init__()
@@ -286,7 +282,7 @@ class gcn(nn.Module):
 
         self.soft = nn.Softmax(-2)
 
-    def forward(self, x, A):
+    def forward(self, x):
         # res = self.residual(x)
 
         # N, C, T, V = x.size()
@@ -306,7 +302,7 @@ class gcn(nn.Module):
             A1 = m.permute(0, 3, 1, 2).contiguous().view(N, V, self.inter_c * T)
             A2 = m.view(N, self.inter_c * T, V)
             A1 = self.soft(torch.matmul(A1, A2) / A1.size(-1))  # N V V
-            A1 = A1 + A[i]
+            A1 = A1
             A2 = x.view(N, C * T, V)
             z = self.conv_d[i](torch.matmul(A2, A1).view(N, C, T, V))
             y = z + y if y is not None else z
