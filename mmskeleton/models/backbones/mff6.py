@@ -27,13 +27,10 @@ class MFFNet6(nn.Module):
         self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))
 
         self.conv_shift_1 = nn.Conv2d(3, 64, 1)
-        self.gcn_shift_1 = gcn_o(64, 64, 3)
+        self.gcn_shift_1 = gcn_o(64, 64, 3, A)
         self.tcn_shift = tcn(64, 128, 3, 1, 1)
-        self.gcn_shift_2= gcn_o(128, 128, 3)
+        self.gcn_shift_2= gcn_o(128, 128, 3, A)
         self.conv_shift_2 = nn.Conv2d(128, 3, 1)
-
-        self.A_shift_1 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
-        self.A_shift_2 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
 
         self.tcn_motion_in = tcn(in_channels, 64, 3, 1, 1)
         self.tcn_pos_in_1 = tcn(in_channels, 64, 3, 1, 1)
@@ -43,38 +40,20 @@ class MFFNet6(nn.Module):
         self.tcn = nn.ModuleList((
             tcn(64, 64, 3, 1, 1),
             tcn(64, 64, 3, 2, 1),
+	    gcn_o(64, 64, 3, A),
             tcn(64, 64, 3, 1, 1),
             tcn(64, 64, 3, 3, 1)
         ))
 
         self.gcn = nn.ModuleList((
-            gcn_o(128, 64, 3),
-            gcn_o(128, 64, 3),
-            gcn_o(128, 64, 3),
-            gcn_o(128, 128, 3)
+            gcn_o(128, 64, 3, A),
+            gcn_o(128, 64, 3, A),
+            gcn_o(128, 64, 3, A),
+            gcn_o(128, 64, 3, A),
+            gcn_o(128, 128, 3, A)
         ))
 
-        self.tcn_back = nn.ModuleList((
-            tcn(64, 64, 3, 1, 1),
-            tcn(64, 64, 3, 1, 1),
-            tcn(64, 64, 3, 1, 1),
-            tcn(128, 256, 3, 1, 1)
-        ))
-
-        self.As =  nn.ParameterList([
-                nn.Parameter(A + 0.0001*torch.ones(A.size()))
-                for i in self.gcn
-            ])
-
-
-        # self.gtcn_1 = gtcn(128, 128, 1, 1)
-        # self.gtcn_2 = gtcn(128, 256, 1, 1)
-        # self.gtcn_3 = gtcn(256, 256, 1, 1)
-
-        # self.A_gtcn_1 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
-        # self.A_gtcn_2 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
-        # self.A_gtcn_3 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
-
+        self.tcn_end = tcn(128, 256, 9, 5, 1)
         self.gcn_end = gcn(256, 256)
 
         # fcn for prediction
@@ -82,9 +61,9 @@ class MFFNet6(nn.Module):
 
     def shift_adjust(self, x):
         shift = self.conv_shift_1(x)
-        shift = self.gcn_shift_1(shift, self.A_shift_1)
+        shift = self.gcn_shift_1(shift)
         shift = self.tcn_shift(shift)
-        shift = self.gcn_shift_2(shift, self.A_shift_2)
+        shift = self.gcn_shift_2(shift)
         shift = self.conv_shift_2(shift)
         shift[:, 2, :, :] = 0
 
@@ -122,15 +101,14 @@ class MFFNet6(nn.Module):
         feats = feats[::-1]
 
         x = x_
-        for gcn, tcn, A_, f, in zip(self.gcn, self.tcn_back, self.As, feats):
+        for gcn, f, in zip(self.gcn, feats):
             if x.shape[2] > f.shape[2]:
                 x = self.scale_T(x, f.shape[2])
             if x.shape[2] < f.shape[2]:
                 f = self.scale_T(f, x.shape[2])
-            x = gcn(torch.cat([x, f], 1), A_)
-            x = tcn(x)
+            x = gcn(torch.cat([x, f], 1))
 
-        # x = self.gcn_gather(x)
+        x = self.tcn_end(x)
         x = self.gcn_end(x)
 
         x = F.max_pool2d(x, x.size()[2:])
@@ -197,8 +175,10 @@ class tcn(nn.Module):
         return self.relu(x)
 
 class gcn_o(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, residual=True):
+    def __init__(self, in_channels, out_channels, kernel_size, A, stride=1, residual=True):
         super().__init__()
+
+        self.A = nn.Parameter(A + 0.0001*torch.ones(A.size()))
 
         self.gcn = ConvTemporalGraphical(in_channels, out_channels, kernel_size)
         self.bn = nn.BatchNorm2d(out_channels)
@@ -220,9 +200,9 @@ class gcn_o(nn.Module):
 
         self.relu = nn.ReLU(inplace=True)
 
-    def forward(self, x, A):
+    def forward(self, x):
         res = self.residual(x)
-        x, _ = self.gcn(x, A)
+        x, _ = self.gcn(x, self.A)
         x = self.bn(x) + res
 
         return self.relu(x)
