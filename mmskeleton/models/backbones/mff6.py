@@ -32,8 +32,8 @@ class MFFNet6(nn.Module):
         self.gcn_shift_2= gcn_o(128, 128, 3)
         self.conv_shift_2 = nn.Conv2d(128, 3, 1)
 
-        self.A_shift_1 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
-        self.A_shift_2 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
+        self.A_shift_1 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+        self.A_shift_2 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
 
         self.tcn_motion_in = tcn(in_channels, 64, 3, 1, 1)
         self.tcn_pos_in_1 = tcn(in_channels, 64, 3, 1, 1)
@@ -62,18 +62,20 @@ class MFFNet6(nn.Module):
         ))
 
         self.As =  nn.ParameterList([
-                nn.Parameter(A + 0.000001*torch.ones(A.size()))
+                nn.Parameter(A + 0.0001*torch.ones(A.size()))
                 for i in self.gcn
             ])
 
 
-        self.gtcn_1 = gtcn(256, 256, 9, 5)
-        self.gtcn_2 = gtcn(256, 256, 5, 5)
-        self.gtcn_3 = gtcn(256, 256, 1, 1)
+        # self.gtcn_1 = gtcn(128, 128, 1, 1)
+        # self.gtcn_2 = gtcn(128, 256, 1, 1)
+        # self.gtcn_3 = gtcn(256, 256, 1, 1)
 
-        self.A_gtcn_1 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
-        self.A_gtcn_2 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
-        self.A_gtcn_3 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
+        # self.A_gtcn_1 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+        # self.A_gtcn_2 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+        # self.A_gtcn_3 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+
+        self.gcn_end = gcn(256, 256)
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
@@ -129,9 +131,7 @@ class MFFNet6(nn.Module):
             x = tcn(x)
 
         # x = self.gcn_gather(x)
-        x = self.gtcn_1(x, self.A_gtcn_1)
-        x = self.gtcn_2(x, self.A_gtcn_2)
-        x = self.gtcn_3(x, self.A_gtcn_3)
+        x = self.gcn_end(x)
 
         x = F.max_pool2d(x, x.size()[2:])
         x, _ = x.view(N, M, -1, 1, 1).max(dim=1)
@@ -264,12 +264,12 @@ class gcn(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.soft = nn.Softmax(-2)
 
-    def forward(self, x, A):
+    def forward(self, x):
         N, C, T, V = x.size()
         y = None
         for i in range(self.num_subset):
             A1 = self.conv_a[i](x).permute(0, 3, 1, 2).contiguous().view(N, V, self.inter_c * T)
-            A2 = self.conv_a[i](x).view(N, self.inter_c * T, V)
+            A2 = self.conv_b[i](x).view(N, self.inter_c * T, V)
             A1 = self.soft(torch.matmul(A1, A2) / A1.size(-1))  # N V V
             A1 = A1
             A2 = x.view(N, C * T, V)

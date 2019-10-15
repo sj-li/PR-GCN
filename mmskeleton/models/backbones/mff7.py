@@ -5,7 +5,8 @@ from torch.autograd import Variable
 
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
-# remove residual link for gcn
+
+# remove +A for gcn
 class MFFNet7(nn.Module):
     def __init__(self,
                  in_channels,
@@ -31,13 +32,18 @@ class MFFNet7(nn.Module):
         self.gcn_shift_2= gcn_o(128, 128, 3)
         self.conv_shift_2 = nn.Conv2d(128, 3, 1)
 
-        self.A_shift_1 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
-        self.A_shift_2 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
+        self.A_shift_1 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+        self.A_shift_2 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
 
         self.tcn_motion_in = tcn(in_channels, 64, 3, 1, 1)
         self.tcn_pos_in_1 = tcn(in_channels, 64, 3, 1, 1)
         self.tcn_pos_in_2 = tcn(in_channels, 64, 3, 1, 1)
-        self.conv_fusion_in = nn.Conv2d(128, 64, 1)
+
+        self.gcn_fusion_in_1 = gcn_o(128, 128, 3)
+        self.gcn_fusion_in_2 = gcn_o(128, 64, 3)
+
+        self.A_fusion_1 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
+        self.A_fusion_2 = nn.Parameter(A + 0.0001*torch.ones(A.size()))
 
         self.tcn = nn.ModuleList((
             tcn(64, 64, 3, 1, 1),
@@ -53,26 +59,13 @@ class MFFNet7(nn.Module):
             gcn_o(128, 128, 3)
         ))
 
-        self.tcn_back = nn.ModuleList((
-            tcn(64, 64, 3, 1, 1),
-            tcn(64, 64, 3, 1, 1),
-            tcn(64, 64, 3, 1, 1),
-            tcn(128, 256, 3, 1, 1)
-        ))
-
         self.As =  nn.ParameterList([
-                nn.Parameter(A + 0.000001*torch.ones(A.size()))
+                nn.Parameter(A + 0.0001*torch.ones(A.size()))
                 for i in self.gcn
             ])
 
 
-        self.gtcn_1 = gtcn(256, 256, 9, 5)
-        self.gtcn_2 = gtcn(256, 256, 5, 5)
-        self.gtcn_3 = gtcn(256, 256, 1, 1)
-
-        self.A_gtcn_1 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
-        self.A_gtcn_2 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
-        self.A_gtcn_3 = nn.Parameter(A + 0.000001*torch.ones(A.size()))
+        self.gcn_end = gcn(128, 256)
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
@@ -109,28 +102,26 @@ class MFFNet7(nn.Module):
         motion = self.tcn_motion_in(motion)
         x_ = self.tcn_pos_in_1(x)
         x = self.tcn_pos_in_2(x)
-        x = self.conv_fusion_in(torch.cat([x, motion], 1))
+        x = self.gcn_fusion_in_1(torch.cat([x, motion], 1), self.A_fusion_1)
+        x = self.gcn_fusion_in_2(x, self.A_fusion_2)
 
         feats = []
         for tcn in self.tcn:
             x = tcn(x)
             feats.append(x)
 
-        feats = feats[::-1]
+        #feats = feats[::-1]
 
         x = x_
-        for gcn, tcn, A_, f, in zip(self.gcn, self.tcn_back, self.As, feats):
+        for gcn, A_, f, in zip(self.gcn, self.As, feats):
             if x.shape[2] > f.shape[2]:
                 x = self.scale_T(x, f.shape[2])
             if x.shape[2] < f.shape[2]:
                 f = self.scale_T(f, x.shape[2])
             x = gcn(torch.cat([x, f], 1), A_)
-            x = tcn(x)
 
         # x = self.gcn_gather(x)
-        x = self.gtcn_1(x, self.A_gtcn_1)
-        x = self.gtcn_2(x, self.A_gtcn_2)
-        x = self.gtcn_3(x, self.A_gtcn_3)
+        x = self.gcn_end(x)
 
         x = F.max_pool2d(x, x.size()[2:])
         x, _ = x.view(N, M, -1, 1, 1).max(dim=1)
@@ -148,7 +139,7 @@ class MFFNet7(nn.Module):
         x = x.squeeze()
 
         return x
-        
+
 
 class tcn(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, dilation=1, dropout=0, residual=False):
@@ -250,7 +241,7 @@ class gcn(nn.Module):
 
         inter_channels = out_channels//coff_embedding
         self.inter_c = inter_channels
-         
+
         self.conv_a = nn.ModuleList()
         self.conv_b = nn.ModuleList()
         self.conv_d = nn.ModuleList()
@@ -263,14 +254,14 @@ class gcn(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.soft = nn.Softmax(-2)
 
-    def forward(self, x, A):
+    def forward(self, x):
         N, C, T, V = x.size()
         y = None
         for i in range(self.num_subset):
             A1 = self.conv_a[i](x).permute(0, 3, 1, 2).contiguous().view(N, V, self.inter_c * T)
             A2 = self.conv_b[i](x).view(N, self.inter_c * T, V)
             A1 = self.soft(torch.matmul(A1, A2) / A1.size(-1))  # N V V
-            A1 = A1 + A[i]
+            A1 = A1
             A2 = x.view(N, C * T, V)
             z = self.conv_d[i](torch.matmul(A2, A1).view(N, C, T, V))
             y = z + y if y is not None else z
