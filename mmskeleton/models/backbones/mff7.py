@@ -32,10 +32,14 @@ class MFFNet7(nn.Module):
         self.gcn_shift_2= gcn_o(128, 128, 3, A)
         self.conv_shift_2 = nn.Conv2d(128, 3, 1)
 
-        self.tcn_motion_in = tcn(in_channels, 64, 3, 1, 1)
-        self.tcn_pos_in_1 = tcn(in_channels, 64, 3, 1, 1)
-        self.tcn_pos_in_2 = tcn(in_channels, 64, 3, 1, 1)
+        self.conv_motion_in = nn.Conv2d(in_channels, 64, 1)
+        self.conv_pos_in_1 = nn.Conv2d(in_channels, 64, 1)
+        self.conv_pos_in_2 = nn.Conv2d(in_channels, 64, 1)
+        self.tcn_motion_in = tcn(64, 64, 3, 1, 1)
+        self.tcn_pos_in_1 = tcn(64, 64, 3, 1, 1)
+        self.tcn_pos_in_2 = tcn(64, 64, 3, 1, 1)
         self.conv_fusion_in = nn.Conv2d(128, 64, 1)
+        self.gcn_fusion= gcn_o(64, 64, 3, A)
 
         self.tcn = nn.ModuleList((
             tcn(64, 64, 3, 1, 1),
@@ -48,7 +52,7 @@ class MFFNet7(nn.Module):
         self.gcn = nn.ModuleList((
             gcn_o(128, 64, 3, A),
             gcn_o(128, 64, 3, A),
-            gcn(128, 64),
+            gcn_o(128, 64, 3, A),
             gcn_o(128, 64, 3, A),
             gcn_o(128, 128, 3, A)
         ))
@@ -88,10 +92,14 @@ class MFFNet7(nn.Module):
         motion[:,:,1:,:] = x[:,:,1:,:] - x[:,:,:-1,:]
 
         # forwad
+        motion = self.conv_motion_in(motion)
         motion = self.tcn_motion_in(motion)
-        x_ = self.tcn_pos_in_1(x)
+        x_ = self.conv_pos_in_1(x)
+        x_ = self.tcn_pos_in_1(x_)
+        x = self.conv_pos_in_2(x)
         x = self.tcn_pos_in_2(x)
         x = self.conv_fusion_in(torch.cat([x, motion], 1))
+        x = self.gcn_fusion(x)
 
         feats = []
         for tcn in self.tcn:

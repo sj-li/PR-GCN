@@ -6,7 +6,6 @@ from torch.autograd import Variable
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
 
-# tcn_final + remove [::-1]
 class MFFNet6(nn.Module):
     def __init__(self,
                  in_channels,
@@ -55,10 +54,9 @@ class MFFNet6(nn.Module):
 
         self.tcn_end = tcn(128, 256, 9, 5, 1)
         self.gcn_end = gcn(256, 256)
-        self.tcn_final = tcn(256, 512, 9, 5, 1)
 
         # fcn for prediction
-        self.fcn = nn.Conv2d(512, num_class, kernel_size=1)
+        self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
 
     def shift_adjust(self, x):
         shift = self.conv_shift_1(x)
@@ -90,27 +88,19 @@ class MFFNet6(nn.Module):
 
         # forwad
         motion = self.tcn_motion_in(motion)
-        x_ = self.tcn_pos_in_1(x)
-        x = self.tcn_pos_in_2(x)
+        x = self.tcn_pos_in_1(x)
         x = self.conv_fusion_in(torch.cat([x, motion], 1))
 
-        feats = []
-        for tcn in self.tcn:
-            x = tcn(x)
-            feats.append(x)
-
-        x = x_
-        for gcn, f, in zip(self.gcn, feats):
-            if x.shape[2] > f.shape[2]:
+        for tcn, gcn, in zip(self.tcn, self.gcn):
+            x_f = tcn(x)
+            if x.shape[2] > x_f.shape[2]:
                 x = self.scale_T(x, f.shape[2])
-            if x.shape[2] < f.shape[2]:
-                f = self.scale_T(f, x.shape[2])
-            x = gcn(torch.cat([x, f], 1))
+            if x.shape[2] < x_f.shape[2]:
+                x_f = self.scale_T(x_f, x.shape[2])
+            x = gcn(torch.cat([x, x_f], 1))
 
         x = self.tcn_end(x)
         x = self.gcn_end(x)
-        x = self.tcn_final(x)
-     
 
         x = F.max_pool2d(x, x.size()[2:])
         x, _ = x.view(N, M, -1, 1, 1).max(dim=1)
@@ -128,7 +118,7 @@ class MFFNet6(nn.Module):
         x = x.squeeze()
 
         return x
-        
+
 
 class tcn(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, dilation=1, dropout=0, residual=False):
@@ -232,7 +222,7 @@ class gcn(nn.Module):
 
         inter_channels = out_channels//coff_embedding
         self.inter_c = inter_channels
-         
+
         self.conv_a = nn.ModuleList()
         self.conv_b = nn.ModuleList()
         self.conv_d = nn.ModuleList()
