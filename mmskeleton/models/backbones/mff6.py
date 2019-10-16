@@ -6,7 +6,7 @@ from torch.autograd import Variable
 from mmskeleton.ops.st_gcn import ConvTemporalGraphical, Graph
 
 
-# remove +A for gcn
+# tcn_final + remove [::-1]
 class MFFNet6(nn.Module):
     def __init__(self,
                  in_channels,
@@ -55,9 +55,10 @@ class MFFNet6(nn.Module):
 
         self.tcn_end = tcn(128, 256, 9, 5, 1)
         self.gcn_end = gcn(256, 256)
+        self.tcn_final = tcn(256, 512, 9, 5, 1)
 
         # fcn for prediction
-        self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
+        self.fcn = nn.Conv2d(512, num_class, kernel_size=1)
 
     def shift_adjust(self, x):
         shift = self.conv_shift_1(x)
@@ -98,8 +99,6 @@ class MFFNet6(nn.Module):
             x = tcn(x)
             feats.append(x)
 
-        feats = feats[::-1]
-
         x = x_
         for gcn, f, in zip(self.gcn, feats):
             if x.shape[2] > f.shape[2]:
@@ -110,6 +109,8 @@ class MFFNet6(nn.Module):
 
         x = self.tcn_end(x)
         x = self.gcn_end(x)
+        x = self.tcn_final(x)
+     
 
         x = F.max_pool2d(x, x.size()[2:])
         x, _ = x.view(N, M, -1, 1, 1).max(dim=1)

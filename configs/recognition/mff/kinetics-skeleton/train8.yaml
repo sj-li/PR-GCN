@@ -43,7 +43,7 @@ processor_cfg:
       # debug: true
 
   # dataloader setting
-  batch_size: 256
+  batch_size: 220
   gpus: 2
 
   # optimizer setting
