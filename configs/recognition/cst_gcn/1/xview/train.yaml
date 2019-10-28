@@ -20,10 +20,11 @@ processor_cfg:
   model_cfg:
     name: '.models.backbones.CST_GCN_1'
     in_channels: 3
-    num_class: 400
+    num_class: 60
+    dropout: 0.5
     edge_importance_weighting: True
     graph_cfg:
-      layout: 'openpose'
+      layout: 'ntu-rgb+d'
       strategy: 'spatial'
   loss_cfg:
     name: 'torch.nn.CrossEntropyLoss'
@@ -31,19 +32,16 @@ processor_cfg:
   # dataset setting
   dataset_cfg: 
     - name: '.datasets.SkeletonFeeder'
-      data_path: ./data/Kinetics/kinetics-skeleton/train_data.npy
-      label_path: ./data/Kinetics/kinetics-skeleton/train_label.pkl
-      random_choose: True
-      random_move: True
-      window_size: 150 
+      data_path: ./data/NTU-RGB-D/xview/train_data.npy
+      label_path: ./data/NTU-RGB-D/xview/train_label.pkl
       # debug: true
     - name: '.datasets.SkeletonFeeder'
-      data_path: ./data/Kinetics/kinetics-skeleton/val_data.npy
-      label_path: ./data/Kinetics/kinetics-skeleton/val_label.pkl
+      data_path: ./data/NTU-RGB-D/xview/val_data.npy
+      label_path: ./data/NTU-RGB-D/xview/val_label.pkl
       # debug: true
 
   # dataloader setting
-  batch_size: 256
+  batch_size: 128
   gpus: 2
 
   # optimizer setting
@@ -56,13 +54,13 @@ processor_cfg:
 
   # runtime setting
   workflow: [['train', 1], ['val', 1]]
-  work_dir: ./work_dir/recognition/cst_gcn_1/kinetics-skeleton
+  work_dir: ./work_dir/recognition/cst_gcn_1/xview
   log_level: 0
-  total_epochs: 50
+  total_epochs: 80
   training_hooks:
     lr_config:
       policy: 'step'
-      step: [20, 30, 40, 50]
+      step: [20, 50]
     log_config:
       interval: 100
       hooks:
