@@ -18,7 +18,7 @@ processor_cfg:
 
   # model setting
   model_cfg:
-    name: '.models.backbones.CST_GCN_1'
+    name: '.models.backbones.CST_GCN_2'
     in_channels: 3
     num_class: 60
     dropout: 0.5
@@ -32,12 +32,12 @@ processor_cfg:
   # dataset setting
   dataset_cfg: 
     - name: '.datasets.SkeletonFeeder'
-      data_path: ./data/NTU-RGB-D/xsub/train_data.npy
-      label_path: ./data/NTU-RGB-D/xsub/train_label.pkl
+      data_path: ./data/NTU-RGB-D/xview/train_data.npy
+      label_path: ./data/NTU-RGB-D/xview/train_label.pkl
       # debug: true
     - name: '.datasets.SkeletonFeeder'
-      data_path: ./data/NTU-RGB-D/xsub/val_data.npy
-      label_path: ./data/NTU-RGB-D/xsub/val_label.pkl
+      data_path: ./data/NTU-RGB-D/xview/val_data.npy
+      label_path: ./data/NTU-RGB-D/xview/val_label.pkl
       # debug: true
 
   # dataloader setting
@@ -54,7 +54,7 @@ processor_cfg:
 
   # runtime setting
   workflow: [['train', 1], ['val', 1]]
-  work_dir: ./work_dir/recognition/cst_gcn_1/xsub
+  work_dir: ./work_dir/recognition/cst_gcn_2/xview
   log_level: 0
   total_epochs: 80
   training_hooks:
