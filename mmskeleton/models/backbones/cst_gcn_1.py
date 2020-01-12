@@ -26,11 +26,11 @@ class CST_GCN_1(nn.Module):
         # build networks
         self.data_bn = nn.BatchNorm1d(in_channels * A.size(1))
 
-        # self.conv_shift_1 = nn.Conv2d(3, 64, 1)
-        # self.gcn_shift_1 = gcn_o(64, 64, 3, A)
-        # self.tcn_shift = tcn(64, 128, 3, 1, 1)
-        # self.gcn_shift_2= gcn_o(128, 128, 3, A)
-        # self.conv_shift_2 = nn.Conv2d(128, 3, 1)
+        self.conv_shift_1 = nn.Conv2d(3, 64, 1)
+        self.gcn_shift_1 = gcn_o(64, 64, 3, A)
+        self.tcn_shift = tcn(64, 128, 3, 1, 1)
+        self.gcn_shift_2= gcn_o(128, 128, 3, A)
+        self.conv_shift_2 = nn.Conv2d(128, 3, 1)
 
         self.tcn_pos_in = tcn(in_channels, 64, 3, 1, 1)
         self.tcn_motion_in = tcn(in_channels, 64, 3, 1, 1)
@@ -38,36 +38,36 @@ class CST_GCN_1(nn.Module):
         self.tcn = nn.ModuleList((
             tcn(64, 64, 3, 1, 1),
             tcn(64, 64, 3, 2, 1),
-	        gcn(64, 64, 3, A),
+	        gcn_o(64, 64, 3, A),
             tcn(64, 64, 3, 1, 1),
             tcn(64, 64, 3, 3, 1)
         ))
 
         self.gcn = nn.ModuleList((
-            gcn(128, 64, 3, A),
-            gcn(128, 64, 3, A),
-            gcn(128, 64, 3, A),
-            gcn(128, 64, 3, A),
-            gcn(128, 128, 3, A)
+            gcn_o(128, 64, 3, A),
+            gcn_o(128, 64, 3, A),
+            gcn_o(128, 64, 3, A),
+            gcn_o(128, 64, 3, A),
+            gcn_o(128, 128, 3, A)
         ))
 
-        self.tcn_end = tcn(128, 256, 9, 5, 1)
-        self.gcn_end = gcn_atten(256, 256, num_subset=1)
+        self.tcn_end = tcn(128, 256, 5, 3, 1)
+        self.gcn_end = gcn(256, 256)
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
 
-    # def shift_adjust(self, x):
-    #     shift = self.conv_shift_1(x)
-    #     shift = self.gcn_shift_1(shift)
-    #     shift = self.tcn_shift(shift)
-    #     shift = self.gcn_shift_2(shift)
-    #     shift = self.conv_shift_2(shift)
-    #     shift[:, 2, :, :] = 0
+    def shift_adjust(self, x):
+        shift = self.conv_shift_1(x)
+        shift = self.gcn_shift_1(shift)
+        shift = self.tcn_shift(shift)
+        shift = self.gcn_shift_2(shift)
+        shift = self.conv_shift_2(shift)
+        shift[:, 2, :, :] = 0
 
-    #     x = x + shift
+        x = x + shift
 
-    #     return x
+        return x
 
     def forward(self, x):
 
@@ -80,7 +80,7 @@ class CST_GCN_1(nn.Module):
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
-        # x = self.shift_adjust(x)
+        x = self.shift_adjust(x)
 
         motion = torch.zeros_like(x)
         motion[:,:,1:,:] = x[:,:,1:,:] - x[:,:,:-1,:]
@@ -120,7 +120,7 @@ class CST_GCN_1(nn.Module):
         x = x.squeeze()
 
         return x
-        
+
 
 class tcn(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride, dilation=1, dropout=0, residual=False):
@@ -167,7 +167,7 @@ class tcn(nn.Module):
 
         return self.relu(x)
 
-class gcn(nn.Module):
+class gcn_o(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, A, stride=1, residual=True):
         super().__init__()
 
@@ -200,7 +200,7 @@ class gcn(nn.Module):
 
         return self.relu(x)
 
-class gcn_atten(nn.Module):
+class gcn(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, residual=False, coff_embedding=2, num_subset=3):
         super().__init__()
 
@@ -224,7 +224,7 @@ class gcn_atten(nn.Module):
 
         inter_channels = out_channels//coff_embedding
         self.inter_c = inter_channels
-         
+
         self.conv_a = nn.ModuleList()
         self.conv_b = nn.ModuleList()
         self.conv_d = nn.ModuleList()
