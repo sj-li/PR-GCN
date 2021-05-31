@@ -6,8 +6,10 @@ from mmskeleton.utils import call_obj, import_obj, load_checkpoint
 from mmcv.runner import Runner
 from mmcv import Config, ProgressBar
 from mmcv.parallel import MMDataParallel
+import time
 
 from tensorboardX import SummaryWriter
+#from ptflops import get_model_complexity_info
 
 writer = SummaryWriter()
 n_iter = 0
@@ -29,14 +31,24 @@ def test(model_cfg, dataset_cfg, checkpoint, batch_size=64, gpus=1, workers=2):
         model = call_obj(**model_cfg)
     load_checkpoint(model, checkpoint, map_location='cpu')
     model = MMDataParallel(model, device_ids=range(gpus)).cuda()
+    #model = MMDataParallel(model)
     model.eval()
 
     results = []
     labels = []
     prog_bar = ProgressBar(len(dataset))
+    total_time = 0
     for data, label in data_loader:
         with torch.no_grad():
+            start = time.time()
             output = model(data).data.cpu().numpy()
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+            t = time.time() - start
+            total_time += t
+
         results.append(output)
         labels.append(label)
         for i in range(len(data)):
@@ -44,6 +56,13 @@ def test(model_cfg, dataset_cfg, checkpoint, batch_size=64, gpus=1, workers=2):
     results = np.concatenate(results)
     labels = np.concatenate(labels)
 
+    #macs, params = get_model_complexity_info(model.cuda(), (3, 300, 18, 2), as_strings=True,
+    #                                              print_per_layer_stat=True, verbose=True)
+    #print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
+    #print('{:<30}  {:<8}'.format('Number of parameters: ', params))
+
+    print("Average infer time: ", total_time/len(data_loader))
+    print("Total infer time: ", total_time)
     print('Top 1: {:.2f}%'.format(100 * topk_accuracy(results, labels, 1)))
     print('Top 5: {:.2f}%'.format(100 * topk_accuracy(results, labels, 5)))
 
@@ -83,6 +102,7 @@ def train(
     else:
         model = call_obj(**model_cfg)
     model.apply(weights_init)
+    print("Model size: ", sum(p.numel() for p in model.parameters() if p.requires_grad))
     model = MMDataParallel(model, device_ids=range(gpus)).cuda()
     loss = call_obj(**loss_cfg)
 
